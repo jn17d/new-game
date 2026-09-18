@@ -11,6 +11,9 @@
   <!-- Chatteris OSM building data (fetched once from Overpass) -->
   <script src="buildings-data.js"></script>
 
+  <!-- Machine sprites (Piskel conveyor, base64-inlined by build-machines-data.mjs) -->
+  <script src="machines-data.js"></script>
+
   <!-- MapLibre GL JS -->
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
@@ -51,7 +54,7 @@
       font-size: 12px;
       color: #555;
     }
-    .claims-panel {
+    .hud-panel {
       position: absolute;
       top: 12px;
       left: 12px;
@@ -66,10 +69,13 @@
       box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
       font-size: 13px;
     }
-    .claims-panel .count {
+    .hud-panel .count {
       font-weight: 600;
     }
-    .claims-panel button {
+    .hud-panel .breakdown {
+      color: #555;
+    }
+    .hud-panel button {
       border: 1px solid #ccc;
       background: #fff;
       border-radius: 6px;
@@ -77,16 +83,16 @@
       font-size: 12px;
       cursor: pointer;
     }
-    .claims-panel button:hover { background: #f0f0f0; }
-    .claims-panel button.confirm { background: #c62828; border-color: #c62828; color: #fff; }
-    .claims-panel button.confirm:hover { background: #b71c1c; }
+    .hud-panel button:hover { background: #f0f0f0; }
+    .hud-panel button.confirm { background: #c62828; border-color: #c62828; color: #fff; }
+    .hud-panel button.confirm:hover { background: #b71c1c; }
     #pixi-overlay {
       position: absolute;
       inset: 0;
       pointer-events: none;   /* clicks pass through to the map */
       z-index: 0;             /* above map canvas, below UI panels */
     }
-    .factory-menu {
+    .building-menu {
       position: absolute;
       z-index: 3;
       background: #fff;
@@ -95,18 +101,27 @@
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
       padding: 10px 12px;
       font-size: 13px;
-      min-width: 200px;
+      min-width: 230px;
       display: none;
     }
-    .factory-menu h4 {
+    .building-menu h4 {
       margin: 0 0 6px;
       font-size: 13px;
     }
-    .factory-menu .row {
+    .building-menu .row {
       color: #555;
       margin: 2px 0;
     }
-    .factory-menu button {
+    .building-menu .badge {
+      display: inline-block;
+      border-radius: 4px;
+      padding: 0 6px;
+      font-size: 11px;
+      color: #fff;
+      margin-left: 6px;
+      vertical-align: 1px;
+    }
+    .building-menu button {
       margin-top: 8px;
       width: 100%;
       border: 1px solid #2e7d32;
@@ -117,12 +132,37 @@
       font-size: 12px;
       cursor: pointer;
     }
-    .factory-menu button:hover:not(:disabled) { background: #43a047; }
-    .factory-menu button:disabled {
+    .building-menu button:hover:not(:disabled) { background: #43a047; }
+    .building-menu button:disabled {
       border-color: #ccc;
       background: #eee;
       color: #888;
       cursor: not-allowed;
+    }
+    .building-menu .cls-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    .building-menu .cls-row button {
+      width: auto;
+      margin-top: 0;
+      white-space: nowrap;
+    }
+    .building-menu .cls-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: -1px;
+    }
+    .building-menu .cls-note {
+      color: #999;
+      font-size: 11px;
+      text-align: right;
     }
   </style>
 </head>
@@ -131,15 +171,16 @@
 <div id="map"></div>
 <div class="map-title">
   Chatteris, Cambridgeshire
-  <small>2D only · click a building to claim it</small>
+  <small>2D only · right-click a building to buy it</small>
 </div>
-<div class="claims-panel">
-  <span>Claimed: <span class="count" id="claim-count">0</span></span>
+<div class="hud-panel">
+  <span>Owned: <span class="count" id="owned-count">0</span></span>
+  <span class="breakdown" id="owned-breakdown"></span>
   <span>Balance: <span class="count" id="wallet-balance">$100,000</span></span>
   <span>Products: <span class="count" id="product-count">0</span></span>
-  <button id="reset-claims" title="Clear all claimed buildings and restore balance">Reset</button>
+  <button id="reset-game" title="Clear all owned buildings and restore balance">Reset</button>
 </div>
-<div class="factory-menu" id="factory-menu"></div>
+<div class="building-menu" id="building-menu"></div>
 <div id="pixi-overlay"></div>
 
 <script>
@@ -202,16 +243,19 @@
       data: { type: 'FeatureCollection', features: [] }
     });
 
-    // Flat footprint fill — claimed buildings turn green via feature-state
+    // Flat footprint fill — owned buildings get their class colour via feature-state
     map.addLayer({
       id: 'osm-buildings-fill',
       type: 'fill',
       source: 'osm-buildings',
       paint: {
         'fill-color': [
-          'case',
-          ['boolean', ['feature-state', 'claimed'], false], '#4caf50',
-          '#d6cfc7'
+          'match', ['feature-state', 'cls'],
+          'factory', '#f5a623',    // amber
+          'warehouse', '#5c7aa8',  // slate blue
+          'office', '#8e6cc9',     // violet
+          'hq', '#e6b422',         // gold
+          '#d6cfc7'                // unowned
         ],
         'fill-opacity': [
           'interpolate', ['linear'], ['zoom'],
@@ -220,8 +264,11 @@
           17, 0.9
         ],
         'fill-outline-color': [
-          'case',
-          ['boolean', ['feature-state', 'claimed'], false], '#2e7d32',
+          'match', ['feature-state', 'cls'],
+          'factory', '#b57400',
+          'warehouse', '#3c5578',
+          'office', '#5e469b',
+          'hq', '#a88000',
           '#a99e93'
         ]
       }
@@ -234,34 +281,107 @@
       source: 'building-highlight',
       paint: {
         'fill-color': [
-          'case',
-          ['boolean', ['get', 'claimed'], false], '#66bb6a',
-          '#ff8f5e'
+          'match', ['get', 'cls'],
+          'factory', '#ffc04d',
+          'warehouse', '#8fa9cf',
+          'office', '#b39ddb',
+          'hq', '#ffd54f',
+          '#ff8f5e'   // unowned hover
         ],
         'fill-opacity': 0.65,
         'fill-outline-color': [
-          'case',
-          ['boolean', ['get', 'claimed'], false], '#2e7d32',
+          'match', ['get', 'cls'],
+          'factory', '#b57400',
+          'warehouse', '#3c5578',
+          'office', '#5e469b',
+          'hq', '#a88000',
           '#e5561f'
         ]
       }
     });
 
-    // ---- Claims system (persisted in localStorage) ----
-    const CLAIMS_KEY = 'chatteris-claims';
+    // ---- Building classes & ownership system (persisted in localStorage) ----
+    const BUILDING_CLASSES = {
+      factory:   { label: 'Factory',      icon: '🏭', color: '#f5a623', costMult: 1.0,
+                   m2PerLine: 50, lineCost: 2500, outputPerTick: 1, belt: true,
+                   desc: 'produces products' },
+      warehouse: { label: 'Warehouse',    icon: '📦', color: '#5c7aa8', costMult: 0.6,
+                   outputMultBonus: 0.20,
+                   desc: '+20% factory output each' },
+      office:    { label: 'Office',       icon: '🏢', color: '#8e6cc9', costMult: 1.5,
+                   cashPerM2PerTick: 0.5,
+                   desc: 'earns cash every tick' },
+      hq:        { label: 'Headquarters', icon: '⚑', color: '#e6b422', costMult: 2.0,
+                   unique: true, globalBonus: 0.10,
+                   desc: '+10% production & office income' }
+    };
 
-    const loadClaims = () => {
+    const OWNED_KEY = 'chatteris-owned';
+    const HQ_KEY = 'chatteris-hq';
+    const LEGACY_CLAIMS_KEY = 'chatteris-claims';
+    const LEGACY_FACTORIES_KEY = 'chatteris-factories';
+
+    // Load ownership, migrating any pre-class save file once (non-destructive:
+    // legacy keys stay in storage but are never read again after migration —
+    // the OLDEST claim becomes the headquarters, the rest become factories,
+    // and legacy factory-line counts carry over).
+    const loadOwned = () => {
+      const raw = localStorage.getItem(OWNED_KEY);
+      if (raw) {
+        try { return new Map(Object.entries(JSON.parse(raw))); } catch (_) { return new Map(); }
+      }
       try {
-        return new Map(Object.entries(JSON.parse(localStorage.getItem(CLAIMS_KEY) || '{}')));
+        const legacy = JSON.parse(localStorage.getItem(LEGACY_CLAIMS_KEY) || '{}');
+        const lines = JSON.parse(localStorage.getItem(LEGACY_FACTORIES_KEY) || '{}');
+        const entries = Object.entries(legacy).sort((a, b) => a[1] - b[1]);
+        const migrated = new Map();
+        let firstHqId = null;
+        for (const [id, ts] of entries) {
+          const cls = firstHqId === null ? 'hq' : 'factory';
+          if (cls === 'hq') firstHqId = id;
+          migrated.set(id, { cls, ts, lines: Number(lines[id]) || 0 });
+        }
+        if (firstHqId !== null) localStorage.setItem(HQ_KEY, firstHqId);
+        return migrated;
       } catch (_) { return new Map(); }
     };
-    const saveClaims = () => {
-      localStorage.setItem(CLAIMS_KEY, JSON.stringify(Object.fromEntries(claims)));
+
+    const owned = loadOwned();
+
+    // Police the persisted HQ id: it must point at a currently-owned HQ record.
+    let hqId = null;
+    const candidateHq = localStorage.getItem(HQ_KEY);
+    if (candidateHq && owned.has(candidateHq) && owned.get(candidateHq).cls === 'hq') {
+      hqId = candidateHq;
+    } else {
+      localStorage.removeItem(HQ_KEY);
+    }
+
+    const saveOwned = () => {
+      localStorage.setItem(OWNED_KEY, JSON.stringify(Object.fromEntries(owned)));
+    };
+    const saveHq = () => {
+      if (hqId === null) localStorage.removeItem(HQ_KEY);
+      else localStorage.setItem(HQ_KEY, hqId);
     };
 
-    const claims = loadClaims();
-    const claimCountEl = document.getElementById('claim-count');
-    const updateClaimCount = () => { claimCountEl.textContent = claims.size; };
+    const ownedCountEl = document.getElementById('owned-count');
+    const ownedBreakdownEl = document.getElementById('owned-breakdown');
+    const updateOwnedDisplay = () => {
+      ownedCountEl.textContent = owned.size;
+      const parts = [];
+      for (const [key, cfg] of Object.entries(BUILDING_CLASSES)) {
+        if (cfg.unique) {
+          if (hqId !== null) parts.push('⚑ HQ');
+          continue;
+        }
+        let n = 0;
+        for (const r of owned.values()) if (r.cls === key) n++;
+        if (n > 0) parts.push(`${cfg.label[0]}${n}`);   // e.g. F3 · W1 · O2
+      }
+      ownedBreakdownEl.textContent = parts.length ? `(${parts.join(' · ')})` : '';
+    };
+    updateOwnedDisplay();
 
     // ---- Wallet / currency system ($10 per m² of footprint) ----
     const WALLET_KEY = 'chatteris-wallet';
@@ -283,33 +403,28 @@
     let wallet = loadWallet();
     updateWalletDisplay();
 
-    // Building prices, computed lazily with turf.area and memoized by id
+    // Building prices (area × $10/m² × class cost multiplier), memoized by id|cls
     const priceCache = new Map();
-    const buildingPrice = (f) => {
-      if (!priceCache.has(f.properties.id)) {
-        priceCache.set(f.properties.id, Math.round(turf.area(f.geometry) * PRICE_PER_M2));
+    const buildingPrice = (f, cls) => {
+      const key = `${f.properties.id}|${cls}`;
+      if (!priceCache.has(key)) {
+        const mult = BUILDING_CLASSES[cls] ? BUILDING_CLASSES[cls].costMult : 1;
+        priceCache.set(key, Math.round(turf.area(f.geometry) * PRICE_PER_M2 * mult));
       }
-      return priceCache.get(f.properties.id);
+      return priceCache.get(key);
     };
 
-    // ---- Production system (factory lines + products) ----
-    const FACTORIES_KEY = 'chatteris-factories';
+    // Footprint area in m², memoized by id (used for office income)
+    const areaCache = new Map();
+    const areaOf = (id, geometry) => {
+      if (!areaCache.has(id)) areaCache.set(id, turf.area(geometry));
+      return areaCache.get(id);
+    };
+
+    // ---- Production system (factory lines + products + office income) ----
     const PRODUCTS_KEY = 'chatteris-products';
-    const LINE_COST = 2500;        // $ per factory line
-    const M2_PER_LINE = 50;        // building area required per line slot
-    const TICK_MS = 10000;         // one product per line per tick
+    const TICK_MS = 10000;         // one production tick every 10s
 
-    const loadFactories = () => {
-      try {
-        const raw = JSON.parse(localStorage.getItem(FACTORIES_KEY) || '{}');
-        return new Map(Object.entries(raw).map(([k, v]) => [k, Number(v) || 0]).filter(([, v]) => v > 0));
-      } catch (_) { return new Map(); }
-    };
-    const saveFactories = () => {
-      localStorage.setItem(FACTORIES_KEY, JSON.stringify(Object.fromEntries(factories)));
-    };
-
-    const factories = loadFactories();
     let products = Math.max(0, Number(localStorage.getItem(PRODUCTS_KEY)) || 0);
 
     const productsEl = document.getElementById('product-count');
@@ -318,17 +433,33 @@
 
     const totalLines = () => {
       let n = 0;
-      for (const v of factories.values()) n += v;
+      for (const rec of owned.values()) if (rec.cls === 'factory') n += rec.lines || 0;
       return n;
     };
+    const classCount = (cls) => {
+      let n = 0;
+      for (const rec of owned.values()) if (rec.cls === cls) n++;
+      return n;
+    };
+    // Factory output multiplier: each warehouse adds +20%, the HQ adds +10%.
+    const factoryOutputMult = () =>
+      (1 + BUILDING_CLASSES.warehouse.outputMultBonus * classCount('warehouse')) *
+      (hqId !== null ? 1 + BUILDING_CLASSES.hq.globalBonus : 1);
 
-    // Line capacity from footprint area (memoized)
+    // Line capacity: footprint area (m² per line from the class registry),
+    // clamped to the number of belt modules that physically fit inside the
+    // footprint (memoized). See layoutFor().
     const capacityCache = new Map();
-    const buildingCapacity = (id, geometry) => {
-      if (!capacityCache.has(id)) {
-        capacityCache.set(id, Math.max(1, Math.floor(turf.area(geometry) / M2_PER_LINE)));
+    const buildingCapacity = (id, geometry, cls = 'factory') => {
+      const key = `${id}|${cls}`;
+      if (!capacityCache.has(key)) {
+        const m2PerLine = (BUILDING_CLASSES[cls] && BUILDING_CLASSES[cls].m2PerLine) ||
+                          BUILDING_CLASSES.factory.m2PerLine;
+        const areaCap = Math.max(1, Math.floor(turf.area(geometry) / m2PerLine));
+        const slotCap = layoutFor(id, geometry).slots.length;
+        capacityCache.set(key, Math.max(1, Math.min(areaCap, slotCap)));
       }
-      return capacityCache.get(id);
+      return capacityCache.get(key);
     };
 
     // Lazy id -> geometry lookup so persisted factories can be drawn after reload
@@ -343,24 +474,38 @@
       return geomById.get(id) || null;
     };
 
-    // Production tick: every 10s, each factory line produces 1 product
+    // Production tick: every 10s factories produce products and offices earn cash
     setInterval(() => {
-      const n = totalLines();
-      if (n > 0) {
-        products += n;
+      const lines = totalLines();
+      const mult = factoryOutputMult();
+      if (lines > 0) {
+        products += Math.round(lines * BUILDING_CLASSES.factory.outputPerTick * mult);
         localStorage.setItem(PRODUCTS_KEY, String(products));
         updateProductDisplay();
       }
+      let officeCash = 0;
+      for (const [id, rec] of owned) {
+        if (rec.cls !== 'office') continue;
+        const geom = geometryFor(id);
+        if (!geom) continue;
+        officeCash += areaOf(id, geom) * BUILDING_CLASSES.office.cashPerM2PerTick *
+                      (hqId !== null ? 1 + BUILDING_CLASSES.hq.globalBonus : 1);
+      }
+      if (officeCash >= 1) {
+        wallet += Math.round(officeCash);
+        saveWallet();
+        updateWalletDisplay();
+      }
     }, TICK_MS);
 
-    // Apply persisted claims to the map's feature states
-    for (const id of claims.keys()) {
-      try { map.setFeatureState({ source: 'osm-buildings', id }, { claimed: true }); } catch (_) {}
-    }
-    updateClaimCount();
+    // Apply persisted ownership to the map's feature states
+    const applyOwnershipState = (id, cls) => {
+      try { map.setFeatureState({ source: 'osm-buildings', id }, { cls }); } catch (_) {}
+    };
+    for (const [id, rec] of owned) applyOwnershipState(id, rec.cls);
 
-    // Reset button — two-step confirm so claims aren't wiped accidentally
-    const resetBtn = document.getElementById('reset-claims');
+    // Reset button — two-step confirm so the game isn't wiped accidentally
+    const resetBtn = document.getElementById('reset-game');
     let confirmTimer = null;
     resetBtn.addEventListener('click', () => {
       if (!resetBtn.classList.contains('confirm')) {
@@ -373,17 +518,17 @@
         return;
       }
       clearTimeout(confirmTimer);
-      for (const id of claims.keys()) {
-        try { map.removeFeatureState({ source: 'osm-buildings', id }, 'claimed'); } catch (_) {}
+      for (const id of owned.keys()) {
+        try { map.removeFeatureState({ source: 'osm-buildings', id }, 'cls'); } catch (_) {}
       }
-      claims.clear();
-      saveClaims();
-      updateClaimCount();
+      owned.clear();
+      hqId = null;
+      saveOwned();
+      saveHq();
+      updateOwnedDisplay();
       wallet = STARTING_BALANCE;
       saveWallet();
       updateWalletDisplay();
-      factories.clear();
-      saveFactories();
       products = 0;
       localStorage.setItem(PRODUCTS_KEY, '0');
       updateProductDisplay();
@@ -408,9 +553,16 @@
       if (p.class && p.class !== 'yes') bits.push(String(p.class).replace(/_/g, ' '));
       if (p.height) bits.push(`${p.height} m`);
       else if (p.levels) bits.push(`${p.levels} level${p.levels > 1 ? 's' : ''}`);
-      if (claims.has(p.id)) bits.push('⚑ claimed');
-      if (!claims.has(p.id)) bits.push(`≈ $${buildingPrice(f).toLocaleString()}`);
-      if (factories.has(p.id)) bits.push(`🏭 ${factories.get(p.id)}`);
+      const rec = owned.get(p.id);
+      if (rec) {
+        const cfg = BUILDING_CLASSES[rec.cls] || BUILDING_CLASSES.factory;
+        bits.push(`⚑ ${cfg.label.toLowerCase()}`);
+        if (rec.cls === 'factory' && rec.lines) bits.push(`🏭 ${rec.lines}`);
+      } else {
+        // "from" price = cheapest class the player can currently buy
+        const minCls = hqId !== null ? 'warehouse' : 'hq';
+        bits.push(`from ≈ $${buildingPrice(f, minCls).toLocaleString()}`);
+      }
       return bits.length ? bits.join(' · ') : `Building #${p.osm_id}`;
     };
 
@@ -419,13 +571,13 @@
       if (!f) return;
       map.getCanvas().style.cursor = 'pointer';
 
-      // Update the single-feature highlight source (copy claimed state along)
+      // Update the single-feature highlight source (copy ownership class along)
       map.getSource('building-highlight').setData({
         type: 'FeatureCollection',
         features: [{
           type: 'Feature',
           geometry: f.geometry,
-          properties: { ...f.properties, claimed: claims.has(f.properties.id) }
+          properties: { ...f.properties, cls: (owned.get(f.properties.id) || {}).cls }
         }]
       });
       hoveredGeom = f.geometry;
@@ -463,30 +615,24 @@
         );
       }
 
-      console.log('Building clicked:', f.properties, 'point-in-polygon:', inside);
+      console.log('Building inspected:', f.properties, 'point-in-polygon:', inside);
 
       if (!inside) return; // click was on the bbox edge, not really inside
 
-      // ---- Claim the building (purchase, persisted in localStorage) ----
+      // ---- Inspect only (purchases happen through the right-click buy menu) ----
       const id = f.properties.id;
+      const rec = owned.get(id);
       let status;
-      if (claims.has(id)) {
-        const since = new Date(claims.get(id));
-        status = `Already yours since ${since.toLocaleDateString()} ${since.toLocaleTimeString()}`;
+      if (rec) {
+        const cfg = BUILDING_CLASSES[rec.cls] || BUILDING_CLASSES.factory;
+        const since = new Date(rec.ts);
+        status = `Owned (${cfg.label}) since ${since.toLocaleDateString()} ${since.toLocaleTimeString()}`;
+        if (rec.cls === 'factory') status += ` · ${rec.lines || 0} line${(rec.lines || 0) === 1 ? '' : 's'}`;
       } else {
-        const price = buildingPrice(f);
-        if (price > wallet) {
-          status = `Insufficient funds — need $${price.toLocaleString()}, have $${wallet.toLocaleString()}`;
-        } else {
-          wallet -= price;
-          saveWallet();
-          updateWalletDisplay();
-          claims.set(id, Date.now());
-          saveClaims();
-          updateClaimCount();
-          map.setFeatureState({ source: 'osm-buildings', id }, { claimed: true });
-          status = `Claimed ✓ for $${price.toLocaleString()} (balance $${wallet.toLocaleString()})`;
-        }
+        const minCls = hqId !== null ? 'warehouse' : 'hq';
+        status = hqId === null
+          ? `Not owned — your first purchase must be a Headquarters (≈ $${buildingPrice(f, minCls).toLocaleString()} here)`
+          : `Not owned — right-click to buy (from ≈ $${buildingPrice(f, minCls).toLocaleString()} here)`;
       }
 
       new maplibregl.Popup({ offset: 12 })
@@ -496,44 +642,118 @@
         .addTo(map);
     });
 
-    // ---- Right-click: factory-line context menu ----
+    // ---- Right-click: buy / manage-building context menu ----
     document.getElementById('map').addEventListener('contextmenu', (e) => e.preventDefault());
 
-    const factoryMenu = document.getElementById('factory-menu');
+    const buildingMenu = document.getElementById('building-menu');
     let menuBuildingId = null;
     let menuFeature = null;
 
-    const closeFactoryMenu = () => {
-      factoryMenu.style.display = 'none';
+    const closeBuildingMenu = () => {
+      buildingMenu.style.display = 'none';
       menuBuildingId = null;
       menuFeature = null;
     };
 
-    const renderFactoryMenu = () => {
+    const renderBuildingMenu = () => {
       if (!menuFeature) return;
       const id = menuBuildingId;
-      const lines = factories.get(id) || 0;
-      const cap = buildingCapacity(id, menuFeature.geometry);
-      const canAdd = lines < cap && wallet >= LINE_COST;
-      const reason = lines >= cap ? ' (at capacity)' : wallet < LINE_COST ? ' (not enough funds)' : '';
-      factoryMenu.innerHTML = `
-        <h4>${describeFeature(menuFeature)}</h4>
-        <div class="row">Factory lines: <strong>${lines} / ${cap}</strong></div>
-        <div class="row">Output: ${lines} product${lines === 1 ? '' : 's'} / 10s</div>
-        ${lines < cap ? `<div class="row">Next line: $${LINE_COST.toLocaleString()}</div>` : ''}
-        <button id="add-factory-line" ${canAdd ? '' : 'disabled'}>
-          + Add factory line${reason}
-        </button>`;
-      factoryMenu.querySelector('#add-factory-line').addEventListener('click', () => {
-        const cur = factories.get(menuBuildingId) || 0;
-        if (cur >= buildingCapacity(menuBuildingId, menuFeature.geometry) || wallet < LINE_COST) return;
-        wallet -= LINE_COST;
-        saveWallet();
-        updateWalletDisplay();
-        factories.set(menuBuildingId, cur + 1);
-        saveFactories();
-        renderFactoryMenu();
-      });
+      const rec = owned.get(id);
+
+      // ---- Unowned: BUY menu (with the strict headquarters-first lock) ----
+      if (!rec) {
+        const rows = [];
+        for (const [key, cfg] of Object.entries(BUILDING_CLASSES)) {
+          if (cfg.unique && hqId !== null) continue;          // HQ row hidden once owned
+          const locked = !cfg.unique && hqId === null;        // strict lock until HQ bought
+          const price = buildingPrice(menuFeature, key);
+          const affordable = wallet >= price;
+          rows.push(`
+            <div class="cls-row">
+              <span>
+                <span class="cls-dot" style="background:${cfg.color}"></span>${cfg.icon} ${cfg.label}
+                <div class="cls-note">${locked ? 'requires HQ' : cfg.desc}</div>
+              </span>
+              <button data-buy="${key}" ${locked || !affordable ? 'disabled' : ''}
+                      title="${locked ? 'Buy your Headquarters first' : (affordable ? 'Buy' : 'Insufficient funds')}">
+                Buy $${price.toLocaleString()}
+              </button>
+            </div>`);
+        }
+        buildingMenu.innerHTML = `
+          <h4>${describeFeature(menuFeature)}</h4>
+          ${rows.join('')}
+          ${hqId === null
+            ? '<div class="row" style="margin-top:8px">Your first purchase must be a Headquarters ⚑</div>'
+            : ''}`;
+        buildingMenu.querySelectorAll('button[data-buy]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const cls = btn.dataset.buy;
+            const cfg = BUILDING_CLASSES[cls];
+            const price = buildingPrice(menuFeature, cls);
+            if (wallet < price) return;                       // affordability gate
+            if (!cfg.unique && hqId === null) return;         // strict HQ gate
+            wallet -= price;
+            saveWallet();
+            updateWalletDisplay();
+            owned.set(menuBuildingId, { cls, ts: Date.now(), lines: 0 });
+            if (cfg.unique) { hqId = menuBuildingId; saveHq(); }
+            saveOwned();
+            updateOwnedDisplay();
+            applyOwnershipState(menuBuildingId, cls);
+            renderBuildingMenu();                             // re-render as the owned view
+          });
+        });
+        return;
+      }
+
+      // ---- Owned: manage / info view ----
+      const cfg = BUILDING_CLASSES[rec.cls] || BUILDING_CLASSES.factory;
+      const header = `<h4>${describeFeature(menuFeature)}` +
+        `<span class="badge" style="background:${cfg.color}">${cfg.label}</span></h4>`;
+
+      if (rec.cls === 'factory') {
+        const lines = rec.lines || 0;
+        const cap = buildingCapacity(id, menuFeature.geometry, 'factory');
+        const lineCost = cfg.lineCost;
+        const canAdd = lines < cap && wallet >= lineCost;
+        const reason = lines >= cap ? ' (at capacity)' : wallet < lineCost ? ' (not enough funds)' : '';
+        buildingMenu.innerHTML = `
+          ${header}
+          <div class="row">Factory lines: <strong>${lines} / ${cap}</strong></div>
+          <div class="row">Output: ${Math.round(lines * factoryOutputMult())} product${lines === 1 ? '' : 's'} / 10s</div>
+          ${lines < cap ? `<div class="row">Next line: $${lineCost.toLocaleString()}</div>` : ''}
+          <button id="add-factory-line" ${canAdd ? '' : 'disabled'}>
+            + Add factory line${reason}
+          </button>`;
+        buildingMenu.querySelector('#add-factory-line').addEventListener('click', () => {
+          const r = owned.get(menuBuildingId);
+          if (!r || r.cls !== 'factory') return;
+          if ((r.lines || 0) >= buildingCapacity(menuBuildingId, menuFeature.geometry, 'factory') ||
+              wallet < lineCost) return;
+          wallet -= lineCost;
+          saveWallet();
+          updateWalletDisplay();
+          r.lines = (r.lines || 0) + 1;
+          saveOwned();
+          renderBuildingMenu();
+        });
+        return;
+      }
+
+      // Warehouse / office / HQ: information only (conversion & selling are
+      // deferred features — hooks live in BUILDING_CLASSES).
+      let effect;
+      if (rec.cls === 'warehouse') {
+        effect = `+${Math.round(cfg.outputMultBonus * 100)}% factory output (now ×${factoryOutputMult().toFixed(2)})`;
+      } else if (rec.cls === 'office') {
+        const perTick = Math.round(areaOf(id, menuFeature.geometry) * cfg.cashPerM2PerTick *
+          (hqId !== null ? 1 + BUILDING_CLASSES.hq.globalBonus : 1));
+        effect = `≈ $${perTick.toLocaleString()} / 10s`;
+      } else {
+        effect = `+${Math.round(cfg.globalBonus * 100)}% to all production and office income`;
+      }
+      buildingMenu.innerHTML = `${header}<div class="row">${effect}</div>`;
     };
 
     map.on('contextmenu', 'osm-buildings-fill', (e) => {
@@ -554,36 +774,38 @@
       }
       if (!inside) return;
 
-      if (!claims.has(f.properties.id)) {
-        new maplibregl.Popup({ offset: 12 })
-          .setLngLat(e.lngLat)
-          .setHTML('<small>You must claim this building before adding factory lines.</small>')
-          .addTo(map);
-        return;
-      }
-
       menuBuildingId = f.properties.id;
       menuFeature = f;
-      renderFactoryMenu();
-      factoryMenu.style.display = 'block';
+      renderBuildingMenu();
+      buildingMenu.style.display = 'block';
       // Position near the cursor, clamped to the viewport
       const pad = 8;
-      const r = factoryMenu.getBoundingClientRect();
+      const r = buildingMenu.getBoundingClientRect();
       let x = e.point.x + pad, y = e.point.y + pad;
       if (x + r.width > window.innerWidth - pad) x = e.point.x - r.width - pad;
       if (y + r.height > window.innerHeight - pad) y = e.point.y - r.height - pad;
-      factoryMenu.style.left = `${Math.max(pad, x)}px`;
-      factoryMenu.style.top = `${Math.max(pad, y)}px`;
+      buildingMenu.style.left = `${Math.max(pad, x)}px`;
+      buildingMenu.style.top = `${Math.max(pad, y)}px`;
     });
 
     // Close the menu on any map interaction or Escape
-    map.on('movestart', closeFactoryMenu);
-    map.on('click', closeFactoryMenu);
-    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFactoryMenu(); });
+    map.on('movestart', closeBuildingMenu);
+    map.on('click', closeBuildingMenu);
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeBuildingMenu(); });
 
     // ---- PixiJS conveyor belts inside factory buildings ----
-    // Belts are redrawn every frame from `factories`, projected through
-    // map.project(), so they stay glued to the map while panning/zooming.
+    // Each factory line renders as one animated belt module (custom Piskel
+    // sprite from machines-data.js), laid out on an interior grid that
+    // follows the footprint's longest edge. Layouts are computed once per
+    // building and cached; the render loop only updates position / scale /
+    // rotation from map.project(), so panning and zooming stay cheap.
+    const BELT_MIN_ZOOM = 18;                     // below this belts are unreadable
+    const MODULE_M = 4;                           // world size (m) of one 32px module
+    const ROW_GAP_M = MODULE_M * (22 / 32);       // trimmed art is 22px of 32
+    const FRAME_MS = 120;                         // ms per animation frame
+    const MAX_SLOTS = 64;                         // safety cap per building
+    const M_PER_DEG_LAT = 111320;
+
     const bboxCache = new Map();
     const bboxOfGeometry = (id, geometry) => {
       if (bboxCache.has(id)) return bboxCache.get(id);
@@ -604,52 +826,156 @@
       return b;
     };
 
-    let pixiApp = null;
-    let beltG = null;
+    // Bearing (screen convention, clockwise from east) of the polygon's
+    // longest edge — belt rows align to the building's main wall.
+    const longestEdgeAngle = (geometry, cy) => {
+      let ring = null;
+      if (geometry.type === 'Polygon') ring = geometry.coordinates[0];
+      else if (geometry.type === 'MultiPolygon' && geometry.coordinates.length) {
+        ring = geometry.coordinates[0][0];
+      }
+      if (!ring || ring.length < 2) return 0;
+      const mLon = M_PER_DEG_LAT * Math.cos(cy * Math.PI / 180);
+      let best = 0, bestLen = -1;
+      for (let i = 0; i < ring.length - 1; i++) {
+        const dx = (ring[i + 1][0] - ring[i][0]) * mLon;
+        const dy = -(ring[i + 1][1] - ring[i][1]) * M_PER_DEG_LAT;
+        const len = dx * dx + dy * dy;
+        if (len > bestLen) { bestLen = len; best = Math.atan2(dy, dx); }
+      }
+      // Fold into -90..90° so the axis (not its direction) is deterministic
+      if (best > Math.PI / 2) best -= Math.PI;
+      if (best < -Math.PI / 2) best += Math.PI;
+      return best;
+    };
 
-    const drawBelts = () => {
-      if (!pixiApp || !beltG) return;
-      beltG.clear();
-      const w = pixiApp.renderer.width / (window.devicePixelRatio || 1);
-      const h = pixiApp.renderer.height / (window.devicePixelRatio || 1);
-      const t = performance.now();
+    // Layout cache: id -> { cx, cy, angle, slots: [{sx, sy}] }
+    // Slots are ordered row-by-row along the long axis (they fill in order
+    // as lines are added). sx/sy are offsets in module-pixel space (32px =
+    // one module) relative to the bbox centre, in the rotated local frame.
+    const layoutCache = new Map();
+    const layoutFor = (id, geometry) => {
+      if (layoutCache.has(id)) return layoutCache.get(id);
+      const [minX, minY, maxX, maxY] = bboxOfGeometry(id, geometry);
+      const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+      const mLon = M_PER_DEG_LAT * Math.cos(cy * Math.PI / 180);
+      const angle = longestEdgeAngle(geometry, cy);
+      const cosA = Math.cos(angle), sinA = Math.sin(angle);
 
-      for (const [id, lineCount] of factories) {
-        const geom = geometryFor(id);
-        if (!geom) continue;
-        const [minX, minY, maxX, maxY] = bboxOfGeometry(id, geom);
-        const tl = map.project([minX, maxY]); // top-left (screen px)
-        const br = map.project([maxX, minY]); // bottom-right
-        // Skip buildings off-screen
-        if (br.x < 0 || tl.x > w || br.y < 0 || tl.y > h) continue;
+      // Extent of the bbox once rotated into the belt frame
+      let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
+      for (const [lon, lat] of [[minX, minY], [minX, maxY], [maxX, minY], [maxX, maxY]]) {
+        const ex = (lon - cx) * mLon, ny = -(lat - cy) * M_PER_DEG_LAT;
+        const e = ex * cosA + ny * sinA;      // world -> local (rotate -angle)
+        const n = -ex * sinA + ny * cosA;
+        if (e < minE) minE = e; if (e > maxE) maxE = e;
+        if (n < minN) minN = n; if (n > maxN) maxN = n;
+      }
 
-        const x = tl.x + 3, y0 = tl.y + 3;
-        const bw = Math.max(6, br.x - tl.x - 6);
-        const BELT_H = 4, GAP = 3;
-        const bh = br.y - tl.y - 6;
-        const maxRows = Math.max(1, Math.floor((bh + GAP) / (BELT_H + GAP)));
-        const rows = Math.min(lineCount, maxRows);
-
-        for (let i = 0; i < rows; i++) {
-          const by = y0 + i * (BELT_H + GAP);
-          // Belt base
-          beltG.rect(x, by, bw, BELT_H).fill({ color: 0x37474f });
-          // Moving chevrons (light blocks) for the animation
-          const chevW = 5;
-          const period = chevW + 5;
-          const off = (t / 60) % period;
-          for (let cx = -period + off; cx < bw; cx += period) {
-            const sx = Math.max(x, x + cx);
-            const ex = Math.min(x + bw, x + cx + chevW);
-            if (ex > sx) beltG.rect(sx, by + 1, ex - sx, BELT_H - 2).fill({ color: 0xffca28 });
+      const slots = [];
+      const cols = Math.max(1, Math.floor((maxE - minE) / MODULE_M));
+      const rows = Math.max(1, Math.floor((maxN - minN) / ROW_GAP_M));
+      for (let r = 0; r < rows && slots.length < MAX_SLOTS; r++) {
+        const n = minN + (r + 0.5) * ROW_GAP_M;
+        for (let c = 0; c < cols && slots.length < MAX_SLOTS; c++) {
+          const e = minE + (c + 0.5) * MODULE_M;
+          // local -> world lng/lat, then point-in-polygon (holes respected)
+          const wx = cx + (e * cosA - n * sinA) / mLon;
+          const wy = cy - (e * sinA + n * cosA) / M_PER_DEG_LAT;
+          if (turf.booleanPointInPolygon([wx, wy], geometry)) {
+            slots.push({ sx: (e / MODULE_M) * 32, sy: (n / MODULE_M) * 32 });
           }
+        }
+      }
+      if (!slots.length) slots.push({ sx: 0, sy: 0 }); // tiny building: 1 centre belt
+
+      const layout = { cx, cy, angle, slots };
+      layoutCache.set(id, layout);
+      return layout;
+    };
+
+    let pixiApp = null;
+    let beltRoot = null;                        // holds one container per building
+    let beltFrames = [];                        // one texture per animation frame
+    const beltContainers = new Map();           // building id -> PIXI.Container
+
+    // One belt module. Today: Piskel flipbook sprite, rotated 90° so the
+    // belt's vertical flow runs along +x (the row direction). If a seamless
+    // cap-less `tile` is ever added to MACHINE_ASSETS.conveyor, swap this
+    // factory over to a TilingSprite — everything else stays unchanged.
+    const makeBeltSprite = () => {
+      const s = new PIXI.Sprite(beltFrames[0] || PIXI.Texture.EMPTY);
+      s.anchor.set(0.5);
+      s.rotation = Math.PI / 2;
+      return s;
+    };
+
+    const renderBelts = () => {
+      if (!pixiApp || !beltRoot) return;
+      const zoom = map.getZoom();
+      beltRoot.visible = zoom >= BELT_MIN_ZOOM;
+      if (!beltRoot.visible || !beltFrames.length) return;
+
+      const w = pixiApp.screen.width, h = pixiApp.screen.height;
+      const mpp = 156543.03392 * Math.cos(CHATTERIS[1] * Math.PI / 180) / Math.pow(2, zoom);
+      const scale = (MODULE_M / mpp) / 32;
+      const frameIdx = Math.floor(performance.now() / FRAME_MS) % beltFrames.length;
+
+      for (const [id, rec] of owned) {
+        if (rec.cls !== 'factory' || !rec.lines) continue;   // belts are factory-class only
+        const lines = rec.lines;
+        let cont = beltContainers.get(id);
+        const geom = geometryFor(id);
+        if (!geom) { if (cont) cont.visible = false; continue; }
+        const layout = layoutFor(id, geom);
+
+        if (!cont) {
+          cont = new PIXI.Container();
+          beltRoot.addChild(cont);
+          beltContainers.set(id, cont);
+        }
+
+        // Off-screen culling via the footprint bbox
+        const [minX, minY, maxX, maxY] = bboxOfGeometry(id, geom);
+        const tl = map.project([minX, maxY]);
+        const br = map.project([maxX, minY]);
+        if (br.x < 0 || tl.x > w || br.y < 0 || tl.y > h) { cont.visible = false; continue; }
+        cont.visible = true;
+
+        const n = Math.min(lines, layout.slots.length);
+        while (cont.children.length < n) cont.addChild(makeBeltSprite());
+        for (let i = 0; i < cont.children.length; i++) {
+          const s = cont.children[i];
+          s.visible = i < n;
+          if (i < n) {
+            s.position.set(layout.slots[i].sx, layout.slots[i].sy);
+            s.texture = beltFrames[frameIdx];
+          }
+        }
+        const anchor = map.project([layout.cx, layout.cy]);
+        cont.position.set(anchor.x, anchor.y);
+        cont.rotation = layout.angle;
+        cont.scale.set(scale);
+      }
+
+      // Drop containers for buildings that no longer have factory lines
+      for (const id of [...beltContainers.keys()]) {
+        const r = owned.get(id);
+        if (!r || r.cls !== 'factory' || !r.lines) {
+          beltContainers.get(id).destroy({ children: true });
+          beltContainers.delete(id);
         }
       }
     };
 
-    // Hook for factory-state changes (reset, etc.) — belts redraw every
-    // frame; this only drops cached bboxes so geometry lookups stay fresh.
-    const refreshBelts = () => { bboxCache.clear(); };
+    // Hook for factory-state changes (reset, etc.) — drops cached layouts and
+    // belt containers so the next frame rebuilds from fresh state.
+    const refreshBelts = () => {
+      layoutCache.clear();
+      capacityCache.clear();
+      for (const c of beltContainers.values()) c.destroy({ children: true });
+      beltContainers.clear();
+    };
 
     (async () => {
       try {
@@ -657,12 +983,26 @@
         await pixiApp.init({
           backgroundAlpha: 0,
           resizeTo: document.getElementById('map'),
-          antialias: true
+          antialias: false,   // pixel art must not be smoothed
+          resolution: 1
         });
         document.getElementById('pixi-overlay').appendChild(pixiApp.canvas);
-        beltG = new PIXI.Graphics();
-        pixiApp.stage.addChild(beltG);
-        pixiApp.ticker.add(() => drawBelts());
+
+        const asset = window.MACHINE_ASSETS && window.MACHINE_ASSETS.conveyor;
+        if (asset) {
+          const base = await PIXI.Assets.load(asset.image);   // data URI -> Texture
+          base.source.scaleMode = 'nearest';                   // crisp pixel art
+          beltFrames = asset.frames.map((f) => new PIXI.Texture({
+            source: base.source,
+            frame: new PIXI.Rectangle(f.x, f.y, asset.frameWidth, asset.frameHeight)
+          }));
+        } else {
+          console.warn('machines-data.js missing — conveyor belts disabled');
+        }
+
+        beltRoot = new PIXI.Container();
+        pixiApp.stage.addChild(beltRoot);
+        pixiApp.ticker.add(() => renderBelts());
       } catch (err) {
         console.warn('PixiJS overlay failed to initialise:', err);
       }
