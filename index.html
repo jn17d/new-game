@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chatteris — 2D Map (MapLibre + OpenFreeMap)</title>
+
+  <!-- Turf.js geospatial analysis -->
+  <script src="https://unpkg.com/@turf/turf@7.1.0/turf.min.js"></script>
+
+  <!-- Chatteris OSM building data (fetched once from Overpass) -->
+  <script src="buildings-data.js"></script>
+
+  <!-- MapLibre GL JS -->
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+
+  <!-- PixiJS (conveyor-belt rendering inside buildings) -->
+  <script src="https://unpkg.com/pixi.js@8.6.6/dist/pixi.min.js"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: system-ui, sans-serif;
+    }
+    #map {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      right: 0;
+    }
+    .map-title {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 1;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 8px 14px;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+      font-size: 15px;
+      font-weight: 600;
+      pointer-events: none;
+    }
+    .map-title small {
+      display: block;
+      font-weight: 400;
+      font-size: 12px;
+      color: #555;
+    }
+    .claims-panel {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 1;
+      margin-top: 62px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 6px 10px;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+      font-size: 13px;
+    }
+    .claims-panel .count {
+      font-weight: 600;
+    }
+    .claims-panel button {
+      border: 1px solid #ccc;
+      background: #fff;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .claims-panel button:hover { background: #f0f0f0; }
+    .claims-panel button.confirm { background: #c62828; border-color: #c62828; color: #fff; }
+    .claims-panel button.confirm:hover { background: #b71c1c; }
+    #pixi-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;   /* clicks pass through to the map */
+      z-index: 0;             /* above map canvas, below UI panels */
+    }
+    .factory-menu {
+      position: absolute;
+      z-index: 3;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      padding: 10px 12px;
+      font-size: 13px;
+      min-width: 200px;
+      display: none;
+    }
+    .factory-menu h4 {
+      margin: 0 0 6px;
+      font-size: 13px;
+    }
+    .factory-menu .row {
+      color: #555;
+      margin: 2px 0;
+    }
+    .factory-menu button {
+      margin-top: 8px;
+      width: 100%;
+      border: 1px solid #2e7d32;
+      background: #4caf50;
+      color: #fff;
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .factory-menu button:hover:not(:disabled) { background: #43a047; }
+    .factory-menu button:disabled {
+      border-color: #ccc;
+      background: #eee;
+      color: #888;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+<div class="map-title">
+  Chatteris, Cambridgeshire
+  <small>2D only · click a building to claim it</small>
+</div>
+<div class="claims-panel">
+  <span>Claimed: <span class="count" id="claim-count">0</span></span>
+  <span>Balance: <span class="count" id="wallet-balance">$100,000</span></span>
+  <span>Products: <span class="count" id="product-count">0</span></span>
+  <button id="reset-claims" title="Clear all claimed buildings and restore balance">Reset</button>
+</div>
+<div class="factory-menu" id="factory-menu"></div>
+<div id="pixi-overlay"></div>
+
+<script>
+  // Chatteris town centre
+  const CHATTERIS = [0.05030011035594765, 52.45514770133596];
+
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://tiles.openfreemap.org/styles/liberty', // free OpenFreeMap tiles
+    center: CHATTERIS,
+    zoom: 14,
+
+    // ---- Lock the map to 2D ----
+    pitch: 0,
+    bearing: 0,
+    maxPitch: 0,            // no tilting possible
+    dragRotate: false,      // no right-drag / ctrl-drag rotation
+    touchZoomRotate: true,  // keep pinch zoom...
+    hash: false
+  });
+
+  // Disable pinch-rotation (keep pinch-zoom working)
+  if (map.touchZoomRotate) {
+    map.touchZoomRotate.disableRotation();
+  }
+
+  // Repeatedly force bearing/pitch back to 0 if anything tries to change them
+  map.on('pitch', () => { if (map.getPitch() !== 0) map.setPitch(0); });
+  map.on('rotate', () => { if (map.getBearing() !== 0) map.resetNorth(); });
+
+  map.on('load', () => {
+    // Remove any 3D building layer that might exist in the style
+    const layers = map.getStyle().layers || [];
+    for (const layer of layers) {
+      const id = layer.id.toLowerCase();
+      const source = (layer.source || '').toLowerCase();
+      if (
+        (id.includes('building') && id.includes('3d')) ||
+        id.includes('building-3d') ||
+        source.includes('building-3d')
+      ) {
+        map.removeLayer(layer.id);
+      }
+    }
+
+    // ---- OSM building footprints (flat 2D, from Overpass data) ----
+    // The OpenFreeMap tiles generalize buildings heavily at their max zoom (z14),
+    // so individual footprints are loaded from a one-time Overpass API export
+    // (see fetch-buildings.mjs) and rendered as a local GeoJSON source.
+    map.addSource('osm-buildings', {
+      type: 'geojson',
+      data: window.BUILDINGS_DATA,
+      promoteId: 'id'   // each feature gets a stable id like 'w123456' (its OSM way id)
+    });
+
+    // Highlight source: holds at most ONE feature (the hovered building),
+    // so it stays cheap no matter how many buildings are on screen.
+    map.addSource('building-highlight', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+
+    // Flat footprint fill — claimed buildings turn green via feature-state
+    map.addLayer({
+      id: 'osm-buildings-fill',
+      type: 'fill',
+      source: 'osm-buildings',
+      paint: {
+        'fill-color': [
+          'case',
+          ['boolean', ['feature-state', 'claimed'], false], '#4caf50',
+          '#d6cfc7'
+        ],
+        'fill-opacity': [
+          'interpolate', ['linear'], ['zoom'],
+          13, 0.35,
+          15, 0.75,
+          17, 0.9
+        ],
+        'fill-outline-color': [
+          'case',
+          ['boolean', ['feature-state', 'claimed'], false], '#2e7d32',
+          '#a99e93'
+        ]
+      }
+    });
+
+    // Highlight layer drawn on top of the fill
+    map.addLayer({
+      id: 'building-highlight-layer',
+      type: 'fill',
+      source: 'building-highlight',
+      paint: {
+        'fill-color': [
+          'case',
+          ['boolean', ['get', 'claimed'], false], '#66bb6a',
+          '#ff8f5e'
+        ],
+        'fill-opacity': 0.65,
+        'fill-outline-color': [
+          'case',
+          ['boolean', ['get', 'claimed'], false], '#2e7d32',
+          '#e5561f'
+        ]
+      }
+    });
+
+    // ---- Claims system (persisted in localStorage) ----
+    const CLAIMS_KEY = 'chatteris-claims';
+
+    const loadClaims = () => {
+      try {
+        return new Map(Object.entries(JSON.parse(localStorage.getItem(CLAIMS_KEY) || '{}')));
+      } catch (_) { return new Map(); }
+    };
+    const saveClaims = () => {
+      localStorage.setItem(CLAIMS_KEY, JSON.stringify(Object.fromEntries(claims)));
+    };
+
+    const claims = loadClaims();
+    const claimCountEl = document.getElementById('claim-count');
+    const updateClaimCount = () => { claimCountEl.textContent = claims.size; };
+
+    // ---- Wallet / currency system ($10 per m² of footprint) ----
+    const WALLET_KEY = 'chatteris-wallet';
+    const PRICE_PER_M2 = 10;
+    const STARTING_BALANCE = 100000;
+
+    const loadWallet = () => {
+      const v = Number(localStorage.getItem(WALLET_KEY));
+      return Number.isFinite(v) ? v : STARTING_BALANCE;
+    };
+    const saveWallet = () => {
+      localStorage.setItem(WALLET_KEY, String(wallet));
+    };
+    const walletEl = document.getElementById('wallet-balance');
+    const updateWalletDisplay = () => {
+      walletEl.textContent = '$' + wallet.toLocaleString();
+    };
+
+    let wallet = loadWallet();
+    updateWalletDisplay();
+
+    // Building prices, computed lazily with turf.area and memoized by id
+    const priceCache = new Map();
+    const buildingPrice = (f) => {
+      if (!priceCache.has(f.properties.id)) {
+        priceCache.set(f.properties.id, Math.round(turf.area(f.geometry) * PRICE_PER_M2));
+      }
+      return priceCache.get(f.properties.id);
+    };
+
+    // ---- Production system (factory lines + products) ----
+    const FACTORIES_KEY = 'chatteris-factories';
+    const PRODUCTS_KEY = 'chatteris-products';
+    const LINE_COST = 2500;        // $ per factory line
+    const M2_PER_LINE = 50;        // building area required per line slot
+    const TICK_MS = 10000;         // one product per line per tick
+
+    const loadFactories = () => {
+      try {
+        const raw = JSON.parse(localStorage.getItem(FACTORIES_KEY) || '{}');
+        return new Map(Object.entries(raw).map(([k, v]) => [k, Number(v) || 0]).filter(([, v]) => v > 0));
+      } catch (_) { return new Map(); }
+    };
+    const saveFactories = () => {
+      localStorage.setItem(FACTORIES_KEY, JSON.stringify(Object.fromEntries(factories)));
+    };
+
+    const factories = loadFactories();
+    let products = Math.max(0, Number(localStorage.getItem(PRODUCTS_KEY)) || 0);
+
+    const productsEl = document.getElementById('product-count');
+    const updateProductDisplay = () => { productsEl.textContent = products.toLocaleString(); };
+    updateProductDisplay();
+
+    const totalLines = () => {
+      let n = 0;
+      for (const v of factories.values()) n += v;
+      return n;
+    };
+
+    // Line capacity from footprint area (memoized)
+    const capacityCache = new Map();
+    const buildingCapacity = (id, geometry) => {
+      if (!capacityCache.has(id)) {
+        capacityCache.set(id, Math.max(1, Math.floor(turf.area(geometry) / M2_PER_LINE)));
+      }
+      return capacityCache.get(id);
+    };
+
+    // Lazy id -> geometry lookup so persisted factories can be drawn after reload
+    let geomById = null;
+    const geometryFor = (id) => {
+      if (!geomById) {
+        geomById = new Map();
+        for (const f of (window.BUILDINGS_DATA.features || [])) {
+          if (f.properties && f.properties.id) geomById.set(f.properties.id, f.geometry);
+        }
+      }
+      return geomById.get(id) || null;
+    };
+
+    // Production tick: every 10s, each factory line produces 1 product
+    setInterval(() => {
+      const n = totalLines();
+      if (n > 0) {
+        products += n;
+        localStorage.setItem(PRODUCTS_KEY, String(products));
+        updateProductDisplay();
+      }
+    }, TICK_MS);
+
+    // Apply persisted claims to the map's feature states
+    for (const id of claims.keys()) {
+      try { map.setFeatureState({ source: 'osm-buildings', id }, { claimed: true }); } catch (_) {}
+    }
+    updateClaimCount();
+
+    // Reset button — two-step confirm so claims aren't wiped accidentally
+    const resetBtn = document.getElementById('reset-claims');
+    let confirmTimer = null;
+    resetBtn.addEventListener('click', () => {
+      if (!resetBtn.classList.contains('confirm')) {
+        resetBtn.classList.add('confirm');
+        resetBtn.textContent = 'Confirm?';
+        confirmTimer = setTimeout(() => {
+          resetBtn.classList.remove('confirm');
+          resetBtn.textContent = 'Reset';
+        }, 3000);
+        return;
+      }
+      clearTimeout(confirmTimer);
+      for (const id of claims.keys()) {
+        try { map.removeFeatureState({ source: 'osm-buildings', id }, 'claimed'); } catch (_) {}
+      }
+      claims.clear();
+      saveClaims();
+      updateClaimCount();
+      wallet = STARTING_BALANCE;
+      saveWallet();
+      updateWalletDisplay();
+      factories.clear();
+      saveFactories();
+      products = 0;
+      localStorage.setItem(PRODUCTS_KEY, '0');
+      updateProductDisplay();
+      refreshBelts();
+      resetBtn.classList.remove('confirm');
+      resetBtn.textContent = 'Reset';
+    });
+
+    // ---- Interaction hooks (hover + click) ----
+    const popup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: 12
+    });
+
+    let hoveredGeom = null;
+
+    const describeFeature = (f) => {
+      const p = f.properties || {};
+      const bits = [];
+      if (p.name) bits.push(p.name);
+      if (p.class && p.class !== 'yes') bits.push(String(p.class).replace(/_/g, ' '));
+      if (p.height) bits.push(`${p.height} m`);
+      else if (p.levels) bits.push(`${p.levels} level${p.levels > 1 ? 's' : ''}`);
+      if (claims.has(p.id)) bits.push('⚑ claimed');
+      if (!claims.has(p.id)) bits.push(`≈ $${buildingPrice(f).toLocaleString()}`);
+      if (factories.has(p.id)) bits.push(`🏭 ${factories.get(p.id)}`);
+      return bits.length ? bits.join(' · ') : `Building #${p.osm_id}`;
+    };
+
+    map.on('mousemove', 'osm-buildings-fill', (e) => {
+      const f = e.features && e.features[0];
+      if (!f) return;
+      map.getCanvas().style.cursor = 'pointer';
+
+      // Update the single-feature highlight source (copy claimed state along)
+      map.getSource('building-highlight').setData({
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          geometry: f.geometry,
+          properties: { ...f.properties, claimed: claims.has(f.properties.id) }
+        }]
+      });
+      hoveredGeom = f.geometry;
+
+      popup.setLngLat(e.lngLat).setHTML(
+        `<strong>${describeFeature(f)}</strong>`
+      ).addTo(map);
+    });
+
+    map.on('mouseleave', 'osm-buildings-fill', () => {
+      map.getCanvas().style.cursor = '';
+      map.getSource('building-highlight').setData({
+        type: 'FeatureCollection', features: []
+      });
+      hoveredGeom = null;
+      popup.remove();
+    });
+
+    // Future interaction entry point: clicking a building
+    map.on('click', 'osm-buildings-fill', (e) => {
+      const f = e.features && e.features[0];
+      if (!f) return;
+
+      // Turf point-in-polygon check: confirm the click point is truly inside
+      const clickPoint = turf.point([e.lngLat.lng, e.lngLat.lat]);
+      const geom = f.geometry;
+      let inside = false;
+
+      if (geom.type === 'Polygon') {
+        inside = turf.booleanPointInPolygon(clickPoint, geom);
+      } else if (geom.type === 'MultiPolygon') {
+        // Test each ring of the multipolygon
+        inside = geom.coordinates.some((poly) =>
+          turf.booleanPointInPolygon(clickPoint, turf.polygon(poly))
+        );
+      }
+
+      console.log('Building clicked:', f.properties, 'point-in-polygon:', inside);
+
+      if (!inside) return; // click was on the bbox edge, not really inside
+
+      // ---- Claim the building (purchase, persisted in localStorage) ----
+      const id = f.properties.id;
+      let status;
+      if (claims.has(id)) {
+        const since = new Date(claims.get(id));
+        status = `Already yours since ${since.toLocaleDateString()} ${since.toLocaleTimeString()}`;
+      } else {
+        const price = buildingPrice(f);
+        if (price > wallet) {
+          status = `Insufficient funds — need $${price.toLocaleString()}, have $${wallet.toLocaleString()}`;
+        } else {
+          wallet -= price;
+          saveWallet();
+          updateWalletDisplay();
+          claims.set(id, Date.now());
+          saveClaims();
+          updateClaimCount();
+          map.setFeatureState({ source: 'osm-buildings', id }, { claimed: true });
+          status = `Claimed ✓ for $${price.toLocaleString()} (balance $${wallet.toLocaleString()})`;
+        }
+      }
+
+      new maplibregl.Popup({ offset: 12 })
+        .setLngLat(e.lngLat)
+        .setHTML(`<strong>${describeFeature(f)}</strong><br/>
+                  <small>${status}</small>`)
+        .addTo(map);
+    });
+
+    // ---- Right-click: factory-line context menu ----
+    document.getElementById('map').addEventListener('contextmenu', (e) => e.preventDefault());
+
+    const factoryMenu = document.getElementById('factory-menu');
+    let menuBuildingId = null;
+    let menuFeature = null;
+
+    const closeFactoryMenu = () => {
+      factoryMenu.style.display = 'none';
+      menuBuildingId = null;
+      menuFeature = null;
+    };
+
+    const renderFactoryMenu = () => {
+      if (!menuFeature) return;
+      const id = menuBuildingId;
+      const lines = factories.get(id) || 0;
+      const cap = buildingCapacity(id, menuFeature.geometry);
+      const canAdd = lines < cap && wallet >= LINE_COST;
+      const reason = lines >= cap ? ' (at capacity)' : wallet < LINE_COST ? ' (not enough funds)' : '';
+      factoryMenu.innerHTML = `
+        <h4>${describeFeature(menuFeature)}</h4>
+        <div class="row">Factory lines: <strong>${lines} / ${cap}</strong></div>
+        <div class="row">Output: ${lines} product${lines === 1 ? '' : 's'} / 10s</div>
+        ${lines < cap ? `<div class="row">Next line: $${LINE_COST.toLocaleString()}</div>` : ''}
+        <button id="add-factory-line" ${canAdd ? '' : 'disabled'}>
+          + Add factory line${reason}
+        </button>`;
+      factoryMenu.querySelector('#add-factory-line').addEventListener('click', () => {
+        const cur = factories.get(menuBuildingId) || 0;
+        if (cur >= buildingCapacity(menuBuildingId, menuFeature.geometry) || wallet < LINE_COST) return;
+        wallet -= LINE_COST;
+        saveWallet();
+        updateWalletDisplay();
+        factories.set(menuBuildingId, cur + 1);
+        saveFactories();
+        renderFactoryMenu();
+      });
+    };
+
+    map.on('contextmenu', 'osm-buildings-fill', (e) => {
+      e.preventDefault();
+      const f = e.features && e.features[0];
+      if (!f) return;
+
+      // Same Turf point-in-polygon gate as left-click
+      const clickPoint = turf.point([e.lngLat.lng, e.lngLat.lat]);
+      const geom = f.geometry;
+      let inside = false;
+      if (geom.type === 'Polygon') {
+        inside = turf.booleanPointInPolygon(clickPoint, geom);
+      } else if (geom.type === 'MultiPolygon') {
+        inside = geom.coordinates.some((poly) =>
+          turf.booleanPointInPolygon(clickPoint, turf.polygon(poly))
+        );
+      }
+      if (!inside) return;
+
+      if (!claims.has(f.properties.id)) {
+        new maplibregl.Popup({ offset: 12 })
+          .setLngLat(e.lngLat)
+          .setHTML('<small>You must claim this building before adding factory lines.</small>')
+          .addTo(map);
+        return;
+      }
+
+      menuBuildingId = f.properties.id;
+      menuFeature = f;
+      renderFactoryMenu();
+      factoryMenu.style.display = 'block';
+      // Position near the cursor, clamped to the viewport
+      const pad = 8;
+      const r = factoryMenu.getBoundingClientRect();
+      let x = e.point.x + pad, y = e.point.y + pad;
+      if (x + r.width > window.innerWidth - pad) x = e.point.x - r.width - pad;
+      if (y + r.height > window.innerHeight - pad) y = e.point.y - r.height - pad;
+      factoryMenu.style.left = `${Math.max(pad, x)}px`;
+      factoryMenu.style.top = `${Math.max(pad, y)}px`;
+    });
+
+    // Close the menu on any map interaction or Escape
+    map.on('movestart', closeFactoryMenu);
+    map.on('click', closeFactoryMenu);
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFactoryMenu(); });
+
+    // ---- PixiJS conveyor belts inside factory buildings ----
+    // Belts are redrawn every frame from `factories`, projected through
+    // map.project(), so they stay glued to the map while panning/zooming.
+    const bboxCache = new Map();
+    const bboxOfGeometry = (id, geometry) => {
+      if (bboxCache.has(id)) return bboxCache.get(id);
+      let minX = 180, minY = 90, maxX = -180, maxY = -90;
+      const scan = (coords) => {
+        for (const c of coords) {
+          if (typeof c[0] === 'number') {
+            if (c[0] < minX) minX = c[0];
+            if (c[0] > maxX) maxX = c[0];
+            if (c[1] < minY) minY = c[1];
+            if (c[1] > maxY) maxY = c[1];
+          } else scan(c);
+        }
+      };
+      scan(geometry.coordinates);
+      const b = [minX, minY, maxX, maxY];
+      bboxCache.set(id, b);
+      return b;
+    };
+
+    let pixiApp = null;
+    let beltG = null;
+
+    const drawBelts = () => {
+      if (!pixiApp || !beltG) return;
+      beltG.clear();
+      const w = pixiApp.renderer.width / (window.devicePixelRatio || 1);
+      const h = pixiApp.renderer.height / (window.devicePixelRatio || 1);
+      const t = performance.now();
+
+      for (const [id, lineCount] of factories) {
+        const geom = geometryFor(id);
+        if (!geom) continue;
+        const [minX, minY, maxX, maxY] = bboxOfGeometry(id, geom);
+        const tl = map.project([minX, maxY]); // top-left (screen px)
+        const br = map.project([maxX, minY]); // bottom-right
+        // Skip buildings off-screen
+        if (br.x < 0 || tl.x > w || br.y < 0 || tl.y > h) continue;
+
+        const x = tl.x + 3, y0 = tl.y + 3;
+        const bw = Math.max(6, br.x - tl.x - 6);
+        const BELT_H = 4, GAP = 3;
+        const bh = br.y - tl.y - 6;
+        const maxRows = Math.max(1, Math.floor((bh + GAP) / (BELT_H + GAP)));
+        const rows = Math.min(lineCount, maxRows);
+
+        for (let i = 0; i < rows; i++) {
+          const by = y0 + i * (BELT_H + GAP);
+          // Belt base
+          beltG.rect(x, by, bw, BELT_H).fill({ color: 0x37474f });
+          // Moving chevrons (light blocks) for the animation
+          const chevW = 5;
+          const period = chevW + 5;
+          const off = (t / 60) % period;
+          for (let cx = -period + off; cx < bw; cx += period) {
+            const sx = Math.max(x, x + cx);
+            const ex = Math.min(x + bw, x + cx + chevW);
+            if (ex > sx) beltG.rect(sx, by + 1, ex - sx, BELT_H - 2).fill({ color: 0xffca28 });
+          }
+        }
+      }
+    };
+
+    // Hook for factory-state changes (reset, etc.) — belts redraw every
+    // frame; this only drops cached bboxes so geometry lookups stay fresh.
+    const refreshBelts = () => { bboxCache.clear(); };
+
+    (async () => {
+      try {
+        pixiApp = new PIXI.Application();
+        await pixiApp.init({
+          backgroundAlpha: 0,
+          resizeTo: document.getElementById('map'),
+          antialias: true
+        });
+        document.getElementById('pixi-overlay').appendChild(pixiApp.canvas);
+        beltG = new PIXI.Graphics();
+        pixiApp.stage.addChild(beltG);
+        pixiApp.ticker.add(() => drawBelts());
+      } catch (err) {
+        console.warn('PixiJS overlay failed to initialise:', err);
+      }
+    })();
+  });
+
+  // ---- Scrolling: MapLibre default wheel-zoom behaviour ----
+  // (native smoothed zoom — no custom handler)
+
+  // ---- Smoother panning: gentler drag inertia ----
+  try { map.dragPan.enable({ maxSpeed: 1.6, deceleration: 2500 }); } catch (_) {}
+
+  // Controls
+  map.addControl(new maplibregl.NavigationControl({
+    showCompass: false,     // no compass = no rotate/pitch control
+    visualizePitch: false
+  }), 'top-right');
+  map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+  map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true } }));
+
+  // Marker on the town centre
+  new maplibregl.Marker({ color: '#d9534f' })
+    .setLngLat(CHATTERIS)
+    .setPopup(new maplibregl.Popup({ offset: 24 }).setText('Chatteris'))
+    .addTo(map);
+</script>
+
+</body>
+</html>
