@@ -22,243 +22,334 @@
   <script src="https://unpkg.com/pixi.js@8.6.6/dist/pixi.min.js"></script>
 
   <style>
+    /* ==========================================================
+       UI design system — see designrules.md
+       Flat solid panels · thin hard border on everything ·
+       exactly ONE hard drop-shadow · hard edges (radius 0) ·
+       chunky high-contrast buttons · no translucency anywhere.
+       Panel colours are dark ink so they separate from the light
+       OSM basemap at any zoom; the accent colours are the same
+       ones the building footprints use on the map, lifted a
+       little where they need to read on a dark fill.
+       ========================================================== */
+    :root {
+      --panel:      #171b21;   /* every panel body */
+      --panel-2:    #212832;   /* button face / inset rows */
+      --panel-3:    #2b333f;   /* button hover */
+      --edge:       #080a0d;   /* the hard border, used everywhere */
+      --rule:       #2f3742;   /* internal hairline dividers */
+      --text:       #eeebe4;
+      --dim:        #98a2ae;
+      --cash:       #5ec46a;
+      --alert:      #e0533f;
+      --hot:        #ff8a4d;
+      /* class colours — map hex, lifted for dark UI where needed */
+      --factory:    #f5a623;
+      --warehouse:  #7c9ccb;
+      --office:     #a98ce0;
+      --hq:         #e6b422;
+      --company:    #3fbcaa;
+      --shadow:     0 3px 0 rgba(0, 0, 0, 0.5);   /* the one shadow */
+    }
+
+    * { box-sizing: border-box; }
+
     html, body {
       margin: 0;
       padding: 0;
       height: 100%;
-      font-family: system-ui, sans-serif;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
     }
-    #map {
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      left: 0;
-      right: 0;
-    }
-    .map-title {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      z-index: 1;
-      background: rgba(255, 255, 255, 0.9);
-      padding: 8px 14px;
-      border-radius: 8px;
-      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-      font-size: 15px;
-      font-weight: 600;
-      pointer-events: none;
-    }
-    .map-title small {
-      display: block;
-      font-weight: 400;
-      font-size: 12px;
-      color: #555;
-    }
-    .hud-panel {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      z-index: 1;
-      margin-top: 62px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      background: rgba(255, 255, 255, 0.9);
-      padding: 6px 10px;
-      border-radius: 8px;
-      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-      font-size: 13px;
-    }
-    .hud-panel .count {
-      font-weight: 600;
-    }
-    #product-count.full {
-      color: #c62828;
-    }
-    .hud-panel .breakdown {
-      color: #555;
-    }
-    .hud-panel button {
-      border: 1px solid #ccc;
-      background: #fff;
-      border-radius: 6px;
-      padding: 4px 10px;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    .hud-panel button:hover { background: #f0f0f0; }
-    .hud-panel button.confirm { background: #c62828; border-color: #c62828; color: #fff; }
-    .hud-panel button.confirm:hover { background: #b71c1c; }
+    #map { position: absolute; inset: 0; }
     #pixi-overlay {
       position: absolute;
       inset: 0;
       pointer-events: none;   /* clicks pass through to the map */
       z-index: 0;             /* above map canvas, below UI panels */
     }
-    .building-menu {
+
+    /* ---------- panel primitive ---------- */
+    .panel {
       position: absolute;
-      z-index: 3;
-      background: #fff;
-      border: 1px solid #ccc;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-      padding: 10px 12px;
-      font-size: 13px;
-      min-width: 230px;
-      display: none;
+      background: var(--panel);
+      color: var(--text);
+      border: 2px solid var(--edge);
+      border-radius: 0;
+      box-shadow: var(--shadow);
     }
-    .building-menu h4 {
-      margin: 0 0 6px;
-      font-size: 13px;
-    }
-    .building-menu .row {
-      color: #555;
-      margin: 2px 0;
-    }
-    .building-menu .badge {
-      display: inline-block;
-      border-radius: 4px;
-      padding: 0 6px;
-      font-size: 11px;
-      color: #fff;
-      margin-left: 6px;
-      vertical-align: 1px;
-    }
-    .building-menu button {
-      margin-top: 8px;
-      width: 100%;
-      border: 1px solid #2e7d32;
-      background: #4caf50;
-      color: #fff;
-      border-radius: 6px;
-      padding: 5px 10px;
+
+    /* ---------- buttons ---------- */
+    .btn {
+      -webkit-appearance: none;
+      appearance: none;
+      font: inherit;
       font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--text);
+      background: var(--panel-2);
+      border: 2px solid var(--edge);
+      border-bottom-width: 4px;   /* the chunk: a solid bottom edge, not a shadow */
+      border-radius: 0;
+      padding: 7px 10px 6px;
       cursor: pointer;
+      white-space: nowrap;
     }
-    .building-menu button:hover:not(:disabled) { background: #43a047; }
-    .building-menu button:disabled {
-      border-color: #ccc;
-      background: #eee;
-      color: #888;
+    .btn:hover:not(:disabled) { background: var(--panel-3); }
+    .btn:active:not(:disabled) { transform: translateY(2px); }
+    .btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+    .btn:disabled {
+      color: #6b7580;
+      background: #1b2129;
       cursor: not-allowed;
     }
-    .building-menu .cls-row {
+    .btn--cash   { background: var(--cash);  color: #07160a; }
+    .btn--cash:hover:not(:disabled)   { background: #6fd97b; }
+    .btn--class  { color: #0b0e12; }                 /* fill set inline per class */
+    .btn--class:hover:not(:disabled)  { filter: brightness(1.12); }
+    .btn--sm     { font-size: 11px; padding: 6px 8px 5px; }
+    .btn--wide   { display: block; width: 100%; text-align: center; white-space: normal; line-height: 1.25; }
+    .btn.confirm { background: var(--alert); color: #1b0703; }   /* reset, armed */
+    .btn.confirm:hover { background: #ef6651; }
+
+    /* ---------- slim top HUD: global state only ---------- */
+    #hud {
+      top: 12px;
+      left: 12px;
+      z-index: 5;
+      display: flex;
+      align-items: stretch;
+      flex-wrap: wrap;
+      max-width: calc(100vw - 24px);
+      font-size: 13px;
+      line-height: 1;
+    }
+    .hud-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 36px;
+      padding: 0 11px;
+      border-right: 1px solid var(--rule);
+    }
+    .hud-item:last-child { border-right: 0; }
+    .hud-label { color: var(--dim); font-size: 11px; font-weight: 600; }
+    .hud-value { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .hud-place { font-weight: 700; }
+    .hud-place .mark { color: var(--hq); margin-right: 5px; }
+    #wallet-balance  { color: var(--cash); }
+    #product-count.full { color: var(--alert); }
+    #owned-breakdown { color: var(--dim); font-size: 11px; font-weight: 600; }
+    #tick-count { color: var(--dim); font-variant-numeric: tabular-nums; }
+    .hud-actions { display: flex; align-items: center; gap: 6px; padding: 0 8px; }
+    #market-toggle[data-hot="1"] { background: var(--company); color: #04231f; }
+    #market-toggle[data-hot="1"]:hover { filter: brightness(1.12); }
+
+    /* ---------- shared popover innards ---------- */
+    .pop-title {
+      margin: -10px -10px 8px;
+      padding: 9px 10px;
+      background: var(--panel);
+      border-bottom: 2px solid var(--edge);
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .pop-sub { color: var(--dim); font-size: 11px; font-weight: 600; }
+    .row { color: var(--dim); font-size: 12px; margin: 5px 0; }
+    .row strong { color: var(--text); font-variant-numeric: tabular-nums; }
+    .badge {
+      padding: 2px 6px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #0b0e12;
+      border: 2px solid var(--edge);
+      white-space: nowrap;
+    }
+    .note {
+      margin: 8px -10px -10px;
+      padding: 8px 10px;
+      background: var(--panel-2);
+      border-top: 2px solid var(--edge);
+      color: var(--dim);
+      font-size: 11px;
+    }
+
+    /* ---------- building popover (anchored to the building) ---------- */
+    .building-menu {
+      z-index: 7;
+      width: min(272px, calc(100vw - 24px));
+      padding: 10px;
+      font-size: 13px;
+      display: none;
+    }
+    /* tail points back at the building that opened it */
+    .building-menu::after {
+      content: "";
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      background: var(--panel);
+      border-left: 2px solid var(--edge);
+      border-top: 2px solid var(--edge);
+      transform: rotate(45deg);
+    }
+    .building-menu.from-tl::after { top: -8px; left: 16px; }
+    .building-menu.from-tr::after { top: -8px; right: 16px; }
+    .building-menu.from-bl::after { bottom: -8px; left: 16px; transform: rotate(225deg); }
+    .building-menu.from-br::after { bottom: -8px; right: 16px; transform: rotate(225deg); }
+
+    .cls-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      margin-top: 6px;
+      padding: 7px 0;
+      border-top: 1px solid var(--rule);
     }
-    .building-menu .cls-row button {
-      width: auto;
-      margin-top: 0;
-      white-space: nowrap;
-    }
-    .building-menu .cls-dot {
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      margin-right: 6px;
-      vertical-align: -1px;
-    }
-    .building-menu .cls-note {
-      color: #999;
-      font-size: 11px;
-      text-align: right;
-    }
+    .pop-title + .cls-row, .pop-actions + .cls-row { border-top: 0; }
+    .cls-name { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+    .cls-dot { width: 10px; height: 10px; border: 2px solid var(--edge); flex: none; }
+    .cls-note { color: var(--dim); font-size: 11px; font-weight: 400; margin-top: 3px; }
+    .stack > .btn { margin-top: 6px; }
+    .pop-actions { margin-bottom: 9px; }
 
-    /* ---- NPC company market panel ---- */
+    /* ---------- market popover (anchored to the HUD button) ---------- */
     .market-panel {
-      position: absolute;
-      top: 110px;
-      left: 12px;
-      z-index: 2;
-      background: #fff;
-      border: 1px solid #ccc;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-      padding: 10px 12px;
-      font-size: 13px;
-      width: 350px;
-      max-height: 60vh;
+      z-index: 6;
+      width: min(330px, calc(100vw - 24px));
+      max-height: min(58vh, 520px);
       overflow-y: auto;
+      padding: 10px;
+      font-size: 13px;
       display: none;
     }
-    .market-head {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-bottom: 4px;
-    }
-    .market-head button {
-      border: 1px solid #2e7d32;
-      background: #4caf50;
-      color: #fff;
-      border-radius: 6px;
-      padding: 4px 10px;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    .market-head button:hover:not(:disabled) { background: #43a047; }
-    .market-head button:disabled {
-      border-color: #ccc; background: #eee; color: #888; cursor: not-allowed;
-    }
-    .market-sub { color: #777; font-size: 11px; }
-    .market-row { border-top: 1px solid #eee; padding: 8px 0 6px; }
-    .market-row.hot .market-name { color: #c62828; }
-    .market-name { font-weight: 600; }
-    .co-badge {
-      display: inline-block;
-      border-radius: 4px;
-      padding: 0 6px;
-      font-size: 11px;
-      color: #fff;
-      margin-right: 6px;
-      background: #2f9e8f;            /* teal — NPC company */
-      vertical-align: 1px;
-    }
-    .market-sector { color: #777; font-weight: 400; font-size: 11px; margin-left: 4px; }
-    .market-stats { color: #333; margin: 3px 0; }
-    .market-stats .trend { font-size: 10px; color: #555; }
+    .market-panel .pop-title { position: sticky; top: -10px; z-index: 1; }
+    .market-row { border-top: 1px solid var(--rule); padding: 9px 0 8px; }
+    .pop-title + .market-row, .pop-actions + .market-row { border-top: 0; }
+    .market-name { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .market-row.hot .market-name { color: var(--hot); }
+    .co-badge { background: var(--company); }
+    .market-sector { color: var(--dim); font-size: 11px; font-weight: 600; }
+    .market-stats { color: var(--dim); font-size: 12px; margin: 5px 0 7px; font-variant-numeric: tabular-nums; }
+    .market-stats strong { color: var(--text); }
     .market-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-    .market-actions button {
-      border: 1px solid #ccc;
-      background: #fff;
-      border-radius: 6px;
-      padding: 3px 8px;
+    .market-empty { color: var(--dim); font-size: 12px; padding: 4px 0 2px; }
+
+    /* ---------- one-off hint, retires itself ---------- */
+    #hint {
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 5;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--dim);
+    }
+    #hint b { color: var(--text); }
+
+    /* ---------- MapLibre chrome, matched to the panels ---------- */
+    .maplibregl-popup-content {
+      background: var(--panel);
+      color: var(--text);
+      border: 2px solid var(--edge);
+      border-radius: 0;
+      box-shadow: var(--shadow);
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .maplibregl-popup-content small { color: var(--dim); font-weight: 500; }
+    .maplibregl-popup-close-button {
+      color: var(--dim);
+      background: transparent;
+      font-size: 15px;
+      padding: 0 7px;
+    }
+    .maplibregl-popup-close-button:hover { background: var(--panel-2); color: var(--text); }
+    .maplibregl-popup-anchor-top .maplibregl-popup-tip,
+    .maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+    .maplibregl-popup-anchor-top-right .maplibregl-popup-tip { border-bottom-color: var(--edge); }
+    .maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+    .maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+    .maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip { border-top-color: var(--edge); }
+    .maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--edge); }
+    .maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--edge); }
+
+    .maplibregl-ctrl-group {
+      background: var(--panel);
+      border: 2px solid var(--edge);
+      border-radius: 0;
+      box-shadow: var(--shadow);
+    }
+    .maplibregl-ctrl-group button { width: 32px; height: 32px; background: var(--panel); }
+    .maplibregl-ctrl-group button:hover { background: var(--panel-3); }
+    .maplibregl-ctrl-group button + button { border-top: 1px solid var(--rule); }
+    .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(90%); }
+    .maplibregl-ctrl-scale {
+      background: var(--panel);
+      color: var(--text);
+      border: 2px solid var(--edge);
+      border-top: none;
+      border-radius: 0;
       font-size: 11px;
-      cursor: pointer;
+      font-weight: 700;
+      box-shadow: var(--shadow);
     }
-    .market-actions button:hover:not(:disabled) { background: #f0f0f0; }
-    .market-actions button:disabled {
-      border-color: #ddd; background: #f5f5f5; color: #999; cursor: not-allowed;
+    .maplibregl-ctrl-attrib {
+      background: var(--panel) !important;
+      border: 2px solid var(--edge);
+      border-radius: 0 !important;
+      color: var(--dim);
+      font-size: 10px;
     }
-    .market-actions button[data-buyout]:not(:disabled) {
-      border-color: #2f9e8f;
-      color: #1f6e63;
+    .maplibregl-ctrl-attrib a { color: var(--dim); }
+    .maplibregl-ctrl-attrib-button { filter: invert(90%); }
+
+    @media (prefers-reduced-motion: reduce) {
+      .btn:active:not(:disabled) { transform: none; }
     }
   </style>
 </head>
 <body>
 
 <div id="map"></div>
-<div class="map-title">
-  Chatteris, Cambridgeshire
-  <small>2D only · right-click a building to buy it</small>
-</div>
-<div class="hud-panel">
-  <span>Owned: <span class="count" id="owned-count">0</span></span>
-  <span class="breakdown" id="owned-breakdown"></span>
-  <span>Balance: <span class="count" id="wallet-balance">$100,000</span></span>
-  <span>Products: <span class="count" id="product-count">0</span></span>
 
-  <button id="market-toggle" title="Companies buying your products nearby">Market (0)</button>
-  <button id="reset-game" title="Clear all owned buildings and restore balance">Reset</button>
+<!-- Slim top HUD — global state only. Anything about a specific building
+     lives in a popover anchored to that building. -->
+<div class="panel" id="hud">
+  <div class="hud-item hud-place"><span class="mark">⚑</span>Chatteris</div>
+  <div class="hud-item">
+    <span class="hud-label">Cash</span>
+    <span class="hud-value" id="wallet-balance">$100,000</span>
+  </div>
+  <div class="hud-item">
+    <span class="hud-label">Stock</span>
+    <span class="hud-value" id="product-count">0 / 50</span>
+  </div>
+  <div class="hud-item">
+    <span class="hud-label">Sites</span>
+    <span class="hud-value" id="owned-count">0</span>
+    <span id="owned-breakdown"></span>
+  </div>
+  <div class="hud-item">
+    <span class="hud-label">Tick</span>
+    <span class="hud-value" id="tick-count">10s</span>
+  </div>
+  <div class="hud-item hud-actions">
+    <button class="btn btn--sm" id="market-toggle" title="Companies buying your products in view">Market <span id="market-count">0</span></button>
+    <button class="btn btn--sm" id="reset-game" title="Clear all owned buildings and restore balance">Reset</button>
+  </div>
 </div>
-<div class="building-menu" id="building-menu"></div>
-<div class="market-panel" id="market-panel"></div>
+
+<div class="panel building-menu" id="building-menu"></div>
+<div class="panel market-panel" id="market-panel"></div>
+<div class="panel" id="hint">Right-click a building to buy it — your first purchase is your <b>headquarters</b>.</div>
 <div id="pixi-overlay"></div>
 
 <script>
@@ -388,20 +479,48 @@
       }
     });
 
+    // Selection outline: marks the one building whose popover is open, so the
+    // panel reads as belonging to that footprint rather than floating over the
+    // map. Dark casing + light line so it survives any terrain underneath.
+    map.addSource('menu-target', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+    map.addLayer({
+      id: 'menu-target-casing',
+      type: 'line',
+      source: 'menu-target',
+      paint: { 'line-color': '#080a0d', 'line-width': 6 }
+    });
+    map.addLayer({
+      id: 'menu-target-line',
+      type: 'line',
+      source: 'menu-target',
+      paint: { 'line-color': '#ffffff', 'line-width': 2 }
+    });
+    const setMenuTarget = (geometry) => {
+      map.getSource('menu-target').setData(geometry
+        ? { type: 'Feature', geometry, properties: {} }
+        : { type: 'FeatureCollection', features: [] });
+    };
+
     // ---- Building classes & ownership system (persisted in localStorage) ----
+    // `color` paints the footprint on the map; `uiColor` is the same hue
+    // lifted where it needs to read as a button fill on the dark panels
+    // (see the palette block in <style>). Map and UI stay one colour language.
     const BUILDING_CLASSES = {
-      factory:   { label: 'Factory',      icon: '🏭', color: '#f5a623', costMult: 1.0,
+      factory:   { label: 'Factory',      icon: '🏭', color: '#f5a623', uiColor: '#f5a623', costMult: 1.0,
                    m2PerLine: 50, lineCost: 2500, outputPerTick: 1, belt: true,
-                   desc: 'produces products' },
-      warehouse: { label: 'Warehouse',    icon: '📦', color: '#5c7aa8', costMult: 0.6,
+                   desc: 'Produces products' },
+      warehouse: { label: 'Warehouse',    icon: '📦', color: '#5c7aa8', uiColor: '#7c9ccb', costMult: 0.6,
                    m2PerProduct: 4,
-                   desc: 'stores products' },
-      office:    { label: 'Office',       icon: '🏢', color: '#8e6cc9', costMult: 1.5,
+                   desc: 'Stores products' },
+      office:    { label: 'Office',       icon: '🏢', color: '#8e6cc9', uiColor: '#a98ce0', costMult: 1.5,
                    cashPerM2PerTick: 0.5,
-                   desc: 'earns cash every tick' },
-      hq:        { label: 'Headquarters', icon: '⚑', color: '#e6b422', costMult: 2.0,
+                   desc: 'Earns cash every tick' },
+      hq:        { label: 'Headquarters', icon: '⚑', color: '#e6b422', uiColor: '#e6b422', costMult: 2.0,
                    unique: true, globalBonus: 0.10,
-                   desc: '+10% production, offices & sale prices' }
+                   desc: '+10% production, office income and sale prices' }
     };
 
     const OWNED_KEY = 'chatteris-owned';
@@ -467,7 +586,7 @@
         for (const r of owned.values()) if (r.cls === key) n++;
         if (n > 0) parts.push(`${cfg.label[0]}${n}`);   // e.g. F3 · W1 · O2
       }
-      ownedBreakdownEl.textContent = parts.length ? `(${parts.join(' · ')})` : '';
+      ownedBreakdownEl.textContent = parts.length ? parts.join(' · ') : '';
     };
     updateOwnedDisplay();
 
@@ -999,10 +1118,38 @@
     // ---- Market panel UI ----
     const marketPanel = document.getElementById('market-panel');
     const marketToggleBtn = document.getElementById('market-toggle');
+    const marketCountEl = document.getElementById('market-count');
     let marketPanelOpen = false;
 
+    // designrules.md: only render UI for objects currently in the viewport.
+    // The roster itself stays camera-radius scoped — it drives the teal map
+    // fills and the overflow auto-sale — but the panel only lists buyers that
+    // are actually on screen. Flip this to false to list the whole roster.
+    const VIEWPORT_SCOPED_UI = true;
+    const companiesInView = () => {
+      if (!VIEWPORT_SCOPED_UI) return marketRoster;
+      const b = map.getBounds();
+      return marketRoster.filter((co) => b.contains(co.centroid));
+    };
+
+    // Anchor the popover under the button that opens it.
+    const positionMarketPanel = () => {
+      const hud = document.getElementById('hud').getBoundingClientRect();
+      const btn = marketToggleBtn.getBoundingClientRect();
+      const w = marketPanel.offsetWidth || 330;
+      marketPanel.style.left = `${Math.max(12, Math.min(btn.left, window.innerWidth - 12 - w))}px`;
+      marketPanel.style.top = `${hud.bottom + 8}px`;
+    };
+
     const updateMarketButton = () => {
-      marketToggleBtn.textContent = `Market (${marketRoster.length})`;
+      const visible = companiesInView();
+      marketCountEl.textContent = visible.length;
+      // Teal button = at least one buyer on screen is paying over the odds
+      const hot = visible.some((co) => {
+        const s = marketState.get(co.id);
+        return s && s.drift >= MARKET.HOT;
+      });
+      marketToggleBtn.dataset.hot = hot ? '1' : '0';
     };
     const escHtml = (t) => String(t)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1010,29 +1157,39 @@
 
     const renderMarketPanel = () => {
       if (!marketPanelOpen) return;
-      const rows = marketRoster.map((co) => {
+      const rows = companiesInView().map((co) => {
         const s = stateFor(co);
         const price = companyPrice(co, s);
         const buyout = companyBuyoutPrice(co);
         const canSell = s.demand > 0 && products > 0;
+        const hot = s.drift >= MARKET.HOT;
         return `
-          <div class="market-row${s.drift >= MARKET.HOT ? ' hot' : ''}" data-co="${co.id}">
-            <div class="market-name"><span class="co-badge">NPC</span>${escHtml(co.name)}${s.drift >= MARKET.HOT ? ' 🔥' : ''}<span class="market-sector">${escHtml(co.sector)}</span></div>
-            <div class="market-stats">$${price} <span class="trend">${trendArrow(s)}</span> · demand ${s.demand}/${s.cap}</div>
+          <div class="market-row${hot ? ' hot' : ''}" data-co="${co.id}">
+            <div class="market-name"><span class="badge co-badge">NPC</span>${escHtml(co.name)}${hot ? ' 🔥' : ''}<span class="market-sector">${escHtml(co.sector)}</span></div>
+            <div class="market-stats"><strong>$${price}</strong> ${trendArrow(s)} per product · wants <strong>${s.demand}</strong> of ${s.cap}</div>
             <div class="market-actions">
-              <button data-sell="10" ${canSell ? '' : 'disabled'}>Sell 10</button>
-              <button data-sell="all" ${canSell ? '' : 'disabled'}>Sell all</button>
-              <button data-buyout="1" title="Buy this site — the company relocates" ${wallet >= buyout ? '' : 'disabled'}>Buy site $${buyout.toLocaleString()}</button>
+              <button class="btn btn--sm btn--cash" data-sell="all" ${canSell ? '' : 'disabled'}>Sell all</button>
+              <button class="btn btn--sm" data-sell="10" ${canSell ? '' : 'disabled'}>Sell 10</button>
+              <button class="btn btn--sm" data-goto="1" title="Centre the map on this site">Show on map</button>
+              <button class="btn btn--sm" data-buyout="1" title="Buy this site — the company relocates" ${wallet >= buyout ? '' : 'disabled'}>Buy site $${buyout.toLocaleString()}</button>
             </div>
           </div>`;
       }).join('');
       marketPanel.innerHTML = `
-        <div class="market-head">
-          <strong>Local companies</strong>
-          <span class="market-sub">within ${Math.round(MARKET.RADIUS_M / 1000)} km · storage ${products.toLocaleString()} / ${totalCapacity().toLocaleString()}</span>
-          <button id="market-sell-best" ${products > 0 ? '' : 'disabled'}>Sell all (best first)</button>
+        <div class="pop-title">
+          Buyers in view
+          <span class="pop-sub">stock ${products.toLocaleString()} / ${totalCapacity().toLocaleString()}</span>
         </div>
-        ${rows || '<div class="market-sub">No companies nearby.</div>'}`;
+        <div class="pop-actions">
+          <button class="btn btn--wide btn--cash" id="market-sell-best" ${products > 0 ? '' : 'disabled'}>Sell everything to the best buyers nearby</button>
+        </div>
+        ${rows || '<div class="market-empty">No buyers on screen. Pan or zoom out to find companies.</div>'}`;
+      marketPanel.querySelectorAll('button[data-goto]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const co = marketRoster.find((c) => c.id === btn.closest('.market-row').dataset.co);
+          if (co) map.easeTo({ center: co.centroid, zoom: Math.max(map.getZoom(), 17) });
+        });
+      });
       marketPanel.querySelectorAll('button[data-sell]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const co = marketRoster.find((c) => c.id === btn.closest('.market-row').dataset.co);
@@ -1054,8 +1211,9 @@
     marketToggleBtn.addEventListener('click', () => {
       marketPanelOpen = !marketPanelOpen;
       marketPanel.style.display = marketPanelOpen ? 'block' : 'none';
-      if (marketPanelOpen) renderMarketPanel();
+      if (marketPanelOpen) { renderMarketPanel(); positionMarketPanel(); }
     });
+    window.addEventListener('resize', () => { if (marketPanelOpen) positionMarketPanel(); });
 
     // Keep the roster local to the camera: refresh (debounced) after pans.
     let marketMoveTimer = null;
@@ -1065,8 +1223,16 @@
     });
     refreshMarket();
 
+    // The tick is the game's unit of time, so the HUD counts it down.
+    const tickEl = document.getElementById('tick-count');
+    let nextTickAt = Date.now() + TICK_MS;
+    setInterval(() => {
+      tickEl.textContent = `${Math.max(0, Math.ceil((nextTickAt - Date.now()) / 1000))}s`;
+    }, 250);
+
     // Production tick: every 10s factories produce products and offices earn cash
     setInterval(() => {
+      nextTickAt = Date.now() + TICK_MS;
       const mult = factoryOutputMult();
       for (const [id, rec] of owned) {
         if (rec.cls !== 'factory' || !rec.lines) continue;
@@ -1189,6 +1355,20 @@
       return bits.length ? bits.join(' · ') : `Building #${p.osm_id}`;
     };
 
+    // Popover headers get a short name plus footprint size; the long
+    // middle-dot string from describeFeature stays on the hover tooltip.
+    const titleOf = (f) => {
+      const p = f.properties || {};
+      if (p.name) return p.name;
+      if (p.class && p.class !== 'yes') {
+        const c = String(p.class).replace(/_/g, ' ');
+        return c.charAt(0).toUpperCase() + c.slice(1);
+      }
+      return `Building #${p.osm_id}`;
+    };
+    const sizeOf = (f) =>
+      `${Math.round(areaOf(f.properties.id, f.geometry)).toLocaleString()} m²`;
+
     map.on('mousemove', 'osm-buildings-fill', (e) => {
       const f = e.features && e.features[0];
       if (!f) return;
@@ -1273,8 +1453,15 @@
     let menuBuildingId = null;
     let menuFeature = null;
 
+    // The onboarding hint retires itself once you've opened a building menu.
+    const HINT_KEY = 'chatteris-hint-seen';
+    const hintEl = document.getElementById('hint');
+    if (hintEl && localStorage.getItem(HINT_KEY)) hintEl.style.display = 'none';
+
     const closeBuildingMenu = () => {
       buildingMenu.style.display = 'none';
+      buildingMenu.classList.remove('from-tl', 'from-tr', 'from-bl', 'from-br');
+      setMenuTarget(null);
       menuBuildingId = null;
       menuFeature = null;
     };
@@ -1305,16 +1492,22 @@
           const price = companyPrice(co, s);
           const buyout = companyBuyoutPrice(co);
           const n10 = Math.min(10, s.demand, products);
+          const nAll = Math.min(s.demand, products);
           buildingMenu.innerHTML = `
-            <h4>${escHtml(co.name)}<span class="badge" style="background:#2f9e8f">Company</span></h4>
-            <div class="row">${escHtml(co.sector)} · ${Math.round(co.area).toLocaleString()} m² office</div>
-            <div class="row">Pays <strong>$${price}</strong> / product · demand ${s.demand}/${s.cap} per tick</div>
-            <button data-sell="10" ${n10 > 0 ? '' : 'disabled'}>Sell ${n10} products (+$${(n10 * price).toLocaleString()})</button>
-            <button data-sell="all" ${s.demand > 0 && products > 0 ? '' : 'disabled'}>Sell to demand (+$${(Math.min(s.demand, products) * price).toLocaleString()})</button>
-            <button data-buyout="1" ${wallet >= buyout ? '' : 'disabled'}
-                    title="Buy the building as an office — the company relocates nearby">
-              Buy site $${buyout.toLocaleString()}
-            </button>`;
+            <div class="pop-title">
+              <span class="badge co-badge">Company</span>${escHtml(co.name)}
+              <span class="pop-sub">${escHtml(co.sector)} · ${Math.round(co.area).toLocaleString()} m²</span>
+            </div>
+            <div class="row">Pays <strong>$${price}</strong> per product</div>
+            <div class="row">Wants <strong>${s.demand}</strong> of ${s.cap} this tick</div>
+            <div class="stack">
+              <button class="btn btn--wide btn--cash" data-sell="all" ${nAll > 0 ? '' : 'disabled'}>Sell ${nAll} for $${(nAll * price).toLocaleString()}</button>
+              <button class="btn btn--wide" data-sell="10" ${n10 > 0 ? '' : 'disabled'}>Sell ${n10} for $${(n10 * price).toLocaleString()}</button>
+              <button class="btn btn--wide" data-buyout="1" ${wallet >= buyout ? '' : 'disabled'}
+                      title="Buy the building as an office — the company relocates nearby">
+                Buy site — $${buyout.toLocaleString()}
+              </button>
+            </div>`;
           buildingMenu.querySelectorAll('button[data-sell]').forEach((btn) => {
             btn.addEventListener('click', () => {
               sellTo(co, btn.dataset.sell === 'all' ? s.demand : 10);
@@ -1332,23 +1525,29 @@
           const locked = !cfg.unique && hqId === null;        // strict lock until HQ bought
           const price = buildingPrice(menuFeature, key);
           const affordable = wallet >= price;
+          const blocked = locked || !affordable;
           rows.push(`
             <div class="cls-row">
               <span>
-                <span class="cls-dot" style="background:${cfg.color}"></span>${cfg.icon} ${cfg.label}
-                <div class="cls-note">${locked ? 'requires HQ' : cfg.desc}</div>
+                <span class="cls-name"><i class="cls-dot" style="background:${cfg.uiColor}"></i>${cfg.icon} ${cfg.label}</span>
+                <div class="cls-note">${locked ? 'Needs a headquarters first' : cfg.desc}</div>
               </span>
-              <button data-buy="${key}" ${locked || !affordable ? 'disabled' : ''}
-                      title="${locked ? 'Buy your Headquarters first' : (affordable ? 'Buy' : 'Insufficient funds')}">
+              <button class="btn btn--sm${blocked ? '' : ' btn--class'}"
+                      ${blocked ? '' : `style="background:${cfg.uiColor}"`}
+                      data-buy="${key}" ${blocked ? 'disabled' : ''}
+                      title="${locked ? 'Buy your headquarters first' : (affordable ? 'Buy' : 'Not enough cash')}">
                 Buy $${price.toLocaleString()}
               </button>
             </div>`);
         }
         buildingMenu.innerHTML = `
-          <h4>${describeFeature(menuFeature)}</h4>
+          <div class="pop-title">
+            ${escHtml(titleOf(menuFeature))}
+            <span class="pop-sub">${sizeOf(menuFeature)} · unclaimed</span>
+          </div>
           ${rows.join('')}
           ${hqId === null
-            ? '<div class="row" style="margin-top:8px">Your first purchase must be a Headquarters ⚑</div>'
+            ? '<div class="note">Start with a headquarters ⚑ — everything else unlocks after it.</div>'
             : ''}`;
         buildingMenu.querySelectorAll('button[data-buy]').forEach((btn) => {
           btn.addEventListener('click', () => {
@@ -1374,34 +1573,39 @@
 
       // ---- Owned: manage / info view ----
       const cfg = BUILDING_CLASSES[rec.cls] || BUILDING_CLASSES.factory;
-      const header = `<h4>${describeFeature(menuFeature)}` +
-        `<span class="badge" style="background:${cfg.color}">${cfg.label}</span></h4>`;
+      const header = `<div class="pop-title">` +
+        `<span class="badge" style="background:${cfg.uiColor}">${cfg.label}</span>` +
+        `${escHtml(titleOf(menuFeature))}` +
+        `<span class="pop-sub">${sizeOf(menuFeature)}</span></div>`;
 
       if (rec.cls === 'factory') {
         const lines = rec.lines || 0;
         const cap = buildingCapacity(id, menuFeature.geometry, 'factory');
         const lineCost = cfg.lineCost;
         const canAdd = lines < cap && wallet >= lineCost;
-        const reason = lines >= cap ? ' (at capacity)' : wallet < lineCost ? ' (not enough funds)' : '';
         const whIds = warehousesNear(centroidOf(menuFeature.geometry));
-        const storageRow = `Storage: ${products.toLocaleString()} / ${totalCapacity().toLocaleString()}` +
-          (products >= totalCapacity() ? ' · full — build a warehouse' : '');
+        const full = products >= totalCapacity();
+        const storageRow = `Stock <strong>${products.toLocaleString()} / ${totalCapacity().toLocaleString()}</strong>` +
+          (full ? ' — full, build a warehouse' : '');
         const deliveryRow = whIds.length
-          ? `📦 Deliveries go to the nearest warehouse (of ${whIds.length})`
-          : 'No warehouse yet — output fills the yard';
+          ? `📦 Output goes to the nearest of your ${whIds.length} warehouse${whIds.length === 1 ? '' : 's'}`
+          : '📦 No warehouse yet — output fills the yard';
+        const addLabel = lines >= cap
+          ? 'At line capacity'
+          : `Add a line — $${lineCost.toLocaleString()}${wallet < lineCost ? ' (not enough cash)' : ''}`;
         buildingMenu.innerHTML = `
           ${header}
-          <div class="row">Factory lines: <strong>${lines} / ${cap}</strong></div>
-          <div class="row">Output: ${Math.round(lines * factoryOutputMult())} product${lines === 1 ? '' : 's'} / 10s</div>
+          <div class="row">Lines <strong>${lines} / ${cap}</strong> · making <strong>${Math.round(lines * factoryOutputMult())}</strong> per tick</div>
           <div class="row">${storageRow}</div>
           <div class="row">${deliveryRow}</div>
-          ${lines < cap ? `<div class="row">Next line: $${lineCost.toLocaleString()}</div>` : ''}
-          <button id="add-factory-line" ${canAdd ? '' : 'disabled'}>
-            + Add factory line${reason}
-          </button>
-          <button id="sell-building" title="Refund: half the buy price. Factory lines are lost.">
-            Sell building for $${resalePrice(id, menuFeature.geometry).toLocaleString()}
-          </button>`;
+          <div class="stack">
+            <button class="btn btn--wide${canAdd ? ' btn--class' : ''}"
+                    ${canAdd ? `style="background:${cfg.uiColor}"` : ''}
+                    id="add-factory-line" ${canAdd ? '' : 'disabled'}>${addLabel}</button>
+            <button class="btn btn--wide" id="sell-building" title="Refund: half the buy price. Factory lines are lost.">
+              Sell site for $${resalePrice(id, menuFeature.geometry).toLocaleString()}
+            </button>
+          </div>`;
         buildingMenu.querySelector('#add-factory-line').addEventListener('click', () => {
           const r = owned.get(menuBuildingId);
           if (!r || r.cls !== 'factory') return;
@@ -1424,18 +1628,25 @@
       let effect;
       if (rec.cls === 'warehouse') {
         const cap = warehouseStorage(areaOf(id, menuFeature.geometry));
-        effect = `Stores ≈ ${cap.toLocaleString()} · Holding ${stockIn(id).toLocaleString()} / ${cap.toLocaleString()}`;
+        effect = `Holding <strong>${stockIn(id).toLocaleString()} / ${cap.toLocaleString()}</strong> products`;
       } else if (rec.cls === 'office') {
         const perTick = Math.round(areaOf(id, menuFeature.geometry) * cfg.cashPerM2PerTick *
           (hqId !== null ? 1 + BUILDING_CLASSES.hq.globalBonus : 1));
-        effect = `≈ $${perTick.toLocaleString()} / 10s`;
+        effect = `Earning <strong>$${perTick.toLocaleString()}</strong> per tick`;
       } else {
-        effect = `+${Math.round(cfg.globalBonus * 100)}% to all production, office income and sale prices`;
+        effect = `<strong>+${Math.round(cfg.globalBonus * 100)}%</strong> to all production, office income and sale prices`;
       }
       buildingMenu.innerHTML = `${header}<div class="row">${effect}</div>
-        <button id="sell-building" title="Refund: half the buy price.${rec.cls === 'warehouse' ? ' Contents spill into remaining storage (yard + warehouses); true overflow auto-sells to the nearest company.' : rec.cls === 'hq' ? ' You will need a new HQ before buying anything else.' : ''}">
-          Sell building for $${resalePrice(id, menuFeature.geometry).toLocaleString()}
-        </button>`;
+        <div class="stack">
+          <button class="btn btn--wide" id="sell-building" title="Refund: half the buy price.${rec.cls === 'warehouse' ? ' Contents spill into remaining storage (yard + warehouses); true overflow auto-sells to the nearest company.' : rec.cls === 'hq' ? ' You will need a new HQ before buying anything else.' : ''}">
+            Sell site for $${resalePrice(id, menuFeature.geometry).toLocaleString()}
+          </button>
+        </div>
+        ${rec.cls === 'hq'
+          ? '<div class="note">Selling your headquarters blocks further purchases until you buy a new one.</div>'
+          : rec.cls === 'warehouse'
+            ? '<div class="note">Selling spills the contents into your remaining storage. Anything that will not fit is auto-sold to the nearest company.</div>'
+            : ''}`;
       wireSellButton();
     };
 
@@ -1461,14 +1672,26 @@
       menuFeature = f;
       renderBuildingMenu();
       buildingMenu.style.display = 'block';
-      // Position near the cursor, clamped to the viewport
-      const pad = 8;
+      setMenuTarget(f.geometry);          // outline the footprint it belongs to
+
+      // Position near the cursor, clamped to the viewport. Which corner the
+      // popover ends up hinged on decides which way its tail points.
+      const pad = 12;
       const r = buildingMenu.getBoundingClientRect();
       let x = e.point.x + pad, y = e.point.y + pad;
-      if (x + r.width > window.innerWidth - pad) x = e.point.x - r.width - pad;
-      if (y + r.height > window.innerHeight - pad) y = e.point.y - r.height - pad;
+      let flipX = false, flipY = false;
+      if (x + r.width > window.innerWidth - pad) { x = e.point.x - r.width - pad; flipX = true; }
+      if (y + r.height > window.innerHeight - pad) { y = e.point.y - r.height - pad; flipY = true; }
       buildingMenu.style.left = `${Math.max(pad, x)}px`;
       buildingMenu.style.top = `${Math.max(pad, y)}px`;
+      buildingMenu.classList.remove('from-tl', 'from-tr', 'from-bl', 'from-br');
+      buildingMenu.classList.add(flipY ? (flipX ? 'from-br' : 'from-bl')
+                                       : (flipX ? 'from-tr' : 'from-tl'));
+
+      if (hintEl) {
+        hintEl.style.display = 'none';
+        localStorage.setItem(HINT_KEY, '1');
+      }
     });
 
     // Close the menu on any map interaction or Escape
