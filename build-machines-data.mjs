@@ -45,7 +45,14 @@ window.MACHINE_ASSETS = {
     // Future: a seamless cap-less strip tile here switches belt runs to
     // TilingSprites (one per row, animated via tilePosition) automatically.
     tile: null
-  }
+  },
+  // Future: a box/crate sprite for animated deliveries between buildings
+  // (factory -> warehouse on production, storage -> NPC buyer on a sale).
+  // Shape expected by index.html's BOX_VISUALS seam — drop it in and every
+  // delivery swaps from the 📦 emoji to this sprite automatically:
+  //   box: { image: "data:image/png;base64,..." }   // whole-frame sprite
+  //   box: { image, frameWidth, frameHeight, frames: [{x,y}] }  // atlas form
+  box: null
 };
 `;
 

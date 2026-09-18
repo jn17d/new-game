@@ -72,6 +72,9 @@
     .hud-panel .count {
       font-weight: 600;
     }
+    #product-count.full {
+      color: #c62828;
+    }
     .hud-panel .breakdown {
       color: #555;
     }
@@ -164,6 +167,78 @@
       font-size: 11px;
       text-align: right;
     }
+
+    /* ---- NPC company market panel ---- */
+    .market-panel {
+      position: absolute;
+      top: 110px;
+      left: 12px;
+      z-index: 2;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      padding: 10px 12px;
+      font-size: 13px;
+      width: 350px;
+      max-height: 60vh;
+      overflow-y: auto;
+      display: none;
+    }
+    .market-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+    .market-head button {
+      border: 1px solid #2e7d32;
+      background: #4caf50;
+      color: #fff;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .market-head button:hover:not(:disabled) { background: #43a047; }
+    .market-head button:disabled {
+      border-color: #ccc; background: #eee; color: #888; cursor: not-allowed;
+    }
+    .market-sub { color: #777; font-size: 11px; }
+    .market-row { border-top: 1px solid #eee; padding: 8px 0 6px; }
+    .market-row.hot .market-name { color: #c62828; }
+    .market-name { font-weight: 600; }
+    .co-badge {
+      display: inline-block;
+      border-radius: 4px;
+      padding: 0 6px;
+      font-size: 11px;
+      color: #fff;
+      margin-right: 6px;
+      background: #2f9e8f;            /* teal — NPC company */
+      vertical-align: 1px;
+    }
+    .market-sector { color: #777; font-weight: 400; font-size: 11px; margin-left: 4px; }
+    .market-stats { color: #333; margin: 3px 0; }
+    .market-stats .trend { font-size: 10px; color: #555; }
+    .market-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .market-actions button {
+      border: 1px solid #ccc;
+      background: #fff;
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .market-actions button:hover:not(:disabled) { background: #f0f0f0; }
+    .market-actions button:disabled {
+      border-color: #ddd; background: #f5f5f5; color: #999; cursor: not-allowed;
+    }
+    .market-actions button[data-buyout]:not(:disabled) {
+      border-color: #2f9e8f;
+      color: #1f6e63;
+    }
   </style>
 </head>
 <body>
@@ -178,9 +253,12 @@
   <span class="breakdown" id="owned-breakdown"></span>
   <span>Balance: <span class="count" id="wallet-balance">$100,000</span></span>
   <span>Products: <span class="count" id="product-count">0</span></span>
+
+  <button id="market-toggle" title="Companies buying your products nearby">Market (0)</button>
   <button id="reset-game" title="Clear all owned buildings and restore balance">Reset</button>
 </div>
 <div class="building-menu" id="building-menu"></div>
+<div class="market-panel" id="market-panel"></div>
 <div id="pixi-overlay"></div>
 
 <script>
@@ -249,13 +327,17 @@
       type: 'fill',
       source: 'osm-buildings',
       paint: {
+        // NPC-company buildings (feature-state co=1) render teal; owned
+        // buildings get their class colour; everything else stays neutral.
         'fill-color': [
-          'match', ['feature-state', 'cls'],
-          'factory', '#f5a623',    // amber
-          'warehouse', '#5c7aa8',  // slate blue
-          'office', '#8e6cc9',     // violet
-          'hq', '#e6b422',         // gold
-          '#d6cfc7'                // unowned
+          'case', ['==', ['feature-state', 'co'], 1], '#2f9e8f',
+          ['match', ['feature-state', 'cls'],
+            'factory', '#f5a623',    // amber
+            'warehouse', '#5c7aa8',  // slate blue
+            'office', '#8e6cc9',     // violet
+            'hq', '#e6b422',         // gold
+            '#d6cfc7'                // unowned
+          ]
         ],
         'fill-opacity': [
           'interpolate', ['linear'], ['zoom'],
@@ -264,12 +346,14 @@
           17, 0.9
         ],
         'fill-outline-color': [
-          'match', ['feature-state', 'cls'],
-          'factory', '#b57400',
-          'warehouse', '#3c5578',
-          'office', '#5e469b',
-          'hq', '#a88000',
-          '#a99e93'
+          'case', ['==', ['feature-state', 'co'], 1], '#1f6e63',
+          ['match', ['feature-state', 'cls'],
+            'factory', '#b57400',
+            'warehouse', '#3c5578',
+            'office', '#5e469b',
+            'hq', '#a88000',
+            '#a99e93'
+          ]
         ]
       }
     });
@@ -281,21 +365,25 @@
       source: 'building-highlight',
       paint: {
         'fill-color': [
-          'match', ['get', 'cls'],
-          'factory', '#ffc04d',
-          'warehouse', '#8fa9cf',
-          'office', '#b39ddb',
-          'hq', '#ffd54f',
-          '#ff8f5e'   // unowned hover
+          'case', ['==', ['get', 'co'], 1], '#5cc4b5',   // company hover (lighter teal)
+          ['match', ['get', 'cls'],
+            'factory', '#ffc04d',
+            'warehouse', '#8fa9cf',
+            'office', '#b39ddb',
+            'hq', '#ffd54f',
+            '#ff8f5e'   // unowned hover
+          ]
         ],
         'fill-opacity': 0.65,
         'fill-outline-color': [
-          'match', ['get', 'cls'],
-          'factory', '#b57400',
-          'warehouse', '#3c5578',
-          'office', '#5e469b',
-          'hq', '#a88000',
-          '#e5561f'
+          'case', ['==', ['get', 'co'], 1], '#1f6e63',
+          ['match', ['get', 'cls'],
+            'factory', '#b57400',
+            'warehouse', '#3c5578',
+            'office', '#5e469b',
+            'hq', '#a88000',
+            '#e5561f'
+          ]
         ]
       }
     });
@@ -306,14 +394,14 @@
                    m2PerLine: 50, lineCost: 2500, outputPerTick: 1, belt: true,
                    desc: 'produces products' },
       warehouse: { label: 'Warehouse',    icon: '📦', color: '#5c7aa8', costMult: 0.6,
-                   outputMultBonus: 0.20,
-                   desc: '+20% factory output each' },
+                   m2PerProduct: 4,
+                   desc: 'stores products' },
       office:    { label: 'Office',       icon: '🏢', color: '#8e6cc9', costMult: 1.5,
                    cashPerM2PerTick: 0.5,
                    desc: 'earns cash every tick' },
       hq:        { label: 'Headquarters', icon: '⚑', color: '#e6b422', costMult: 2.0,
                    unique: true, globalBonus: 0.10,
-                   desc: '+10% production & office income' }
+                   desc: '+10% production, offices & sale prices' }
     };
 
     const OWNED_KEY = 'chatteris-owned';
@@ -422,29 +510,41 @@
     };
 
     // ---- Production system (factory lines + products + office income) ----
-    const PRODUCTS_KEY = 'chatteris-products';
+    const PRODUCTS_KEY = 'chatteris-products';   // legacy scalar total (migrated from, never rewritten)
+    const STOCK_KEY = 'chatteris-stock';         // per-holder stock: { holderId: units }
     const TICK_MS = 10000;         // one production tick every 10s
+    const BASE_STORAGE = 50;       // free loading-yard storage before any warehouse
+    const YARD_ID = '__yard';      // virtual yard holder — always exists, cap = BASE_STORAGE
 
-    let products = Math.max(0, Number(localStorage.getItem(PRODUCTS_KEY)) || 0);
+    let products = 0;              // scalar total of `stock` (kept: HUD / market / menu seam)
+    const stock = new Map();       // holder id -> units (holders at 0 are pruned)
 
     const productsEl = document.getElementById('product-count');
-    const updateProductDisplay = () => { productsEl.textContent = products.toLocaleString(); };
-    updateProductDisplay();
+    const updateProductDisplay = () => {
+      const cap = totalCapacity();
+      productsEl.textContent = `${products.toLocaleString()} / ${cap.toLocaleString()}`;
+      productsEl.classList.toggle('full', products >= cap);
+    };
 
-    const totalLines = () => {
-      let n = 0;
-      for (const rec of owned.values()) if (rec.cls === 'factory') n += rec.lines || 0;
-      return n;
-    };
-    const classCount = (cls) => {
-      let n = 0;
-      for (const rec of owned.values()) if (rec.cls === cls) n++;
-      return n;
-    };
-    // Factory output multiplier: each warehouse adds +20%, the HQ adds +10%.
+    // Factory output multiplier: the HQ adds +10% (warehouses no longer boost
+    // production — they provide storage instead).
     const factoryOutputMult = () =>
-      (1 + BUILDING_CLASSES.warehouse.outputMultBonus * classCount('warehouse')) *
       (hqId !== null ? 1 + BUILDING_CLASSES.hq.globalBonus : 1);
+
+    // Storage cap: a free loading yard plus warehouse area. Each warehouse
+    // stores floor(area / m2PerProduct) products (areaOf is memoized, and the
+    // owned set is small, so recomputing on demand is cheap).
+    const warehouseStorage = (area) =>
+      Math.floor(area / BUILDING_CLASSES.warehouse.m2PerProduct);
+    const totalCapacity = () => {
+      let n = BASE_STORAGE;
+      for (const [id, rec] of owned) {
+        if (rec.cls !== 'warehouse') continue;
+        const geom = geometryFor(id);
+        if (geom) n += warehouseStorage(areaOf(id, geom));
+      }
+      return n;
+    };
 
     // Line capacity: footprint area (m² per line from the class registry),
     // clamped to the number of belt modules that physically fit inside the
@@ -462,27 +562,528 @@
       return capacityCache.get(key);
     };
 
-    // Lazy id -> geometry lookup so persisted factories can be drawn after reload
-    let geomById = null;
-    const geometryFor = (id) => {
-      if (!geomById) {
-        geomById = new Map();
-        for (const f of (window.BUILDINGS_DATA.features || [])) {
-          if (f.properties && f.properties.id) geomById.set(f.properties.id, f.geometry);
+    // ---- Footprint access seam (world-scalable data path) ----
+    // Today this is backed by the single Chatteris dataset (index built once,
+    // lazily). The follow-up refactor swaps these internals for a cell-bucket
+    // spatial index over chunked region data WITHOUT touching any call site:
+    // all gameplay code goes through all()/featureById()/geometryFor() only.
+    const Footprints = (() => {
+      let features = [];
+      let byId = null;
+      const index = () => {
+        if (byId) return;
+        features = (window.BUILDINGS_DATA && window.BUILDINGS_DATA.features) || [];
+        byId = new Map();
+        for (const f of features) {
+          if (f.properties && f.properties.id) byId.set(f.properties.id, f);
+        }
+      };
+      const featureById = (id) => { index(); return byId.get(id) || null; };
+      return {
+        all: () => { index(); return features; },
+        featureById,
+        geometryFor: (id) => { const f = featureById(id); return f ? f.geometry : null; }
+      };
+    })();
+    const geometryFor = Footprints.geometryFor;
+
+    // ---- Per-building stock (warehouses + virtual yard) ----
+    // Stock lives per holder: each warehouse holds up to its own capacity and
+    // the yard (YARD_ID) holds BASE_STORAGE. The scalar `products` is always
+    // totalStock() — kept so the HUD, market panel and menus read one number.
+    const stockIn = (id) => stock.get(id) || 0;
+    const setStock = (id, n) => { if (n > 0) stock.set(id, n); else stock.delete(id); };
+    const totalStock = () => { let n = 0; for (const v of stock.values()) n += v; return n; };
+    const saveStock = () => localStorage.setItem(STOCK_KEY, JSON.stringify(Object.fromEntries(stock)));
+    const capacityOf = (holderId) => {
+      if (holderId === YARD_ID) return BASE_STORAGE;
+      const rec = owned.get(holderId);
+      if (!rec || rec.cls !== 'warehouse') return 0;
+      const geom = geometryFor(holderId);
+      return geom ? warehouseStorage(areaOf(holderId, geom)) : 0;
+    };
+    const freeRoom = (id) => capacityOf(id) - stockIn(id);
+    const syncProducts = () => {
+      products = totalStock();
+      saveStock();
+      updateProductDisplay();
+    };
+
+    // Owned warehouse ids sorted by squared distance to `center` ([lng,lat]);
+    // insertion order when no centre is given (legacy migration).
+    const warehousesNear = (center) => {
+      const out = [];
+      for (const [id, rec] of owned) {
+        if (rec.cls !== 'warehouse') continue;
+        const geom = geometryFor(id);
+        if (!geom) continue;
+        if (!center) { out.push([0, id]); continue; }
+        const c = centroidOf(geom);
+        const cosLat = Math.cos((center[1] + c[1]) / 2 * Math.PI / 180) * 111320;
+        const dx = (c[0] - center[0]) * cosLat;
+        const dy = (c[1] - center[1]) * 111320;
+        out.push([dx * dx + dy * dy, id]);
+      }
+      out.sort((a, b) => a[0] - b[0]);
+      return out.map((x) => x[1]);
+    };
+
+    // Place n units near `center`: warehouses nearest-first with room, then
+    // the yard (the overflow bin). Returns { placed, legs: [{holderId, n}] }.
+    // Production passes the factory's centroid; selling a warehouse passes the
+    // sold building's centroid (its stock spills through the same path).
+    const allocateStock = (n, center) => {
+      const legs = [];
+      let left = n;
+      for (const id of warehousesNear(center)) {
+        if (left <= 0) break;
+        const take = Math.min(left, freeRoom(id));
+        if (take > 0) { setStock(id, stockIn(id) + take); left -= take; legs.push({ holderId: id, n: take }); }
+      }
+      if (left > 0 && freeRoom(YARD_ID) > 0) {
+        const take = Math.min(left, freeRoom(YARD_ID));
+        setStock(YARD_ID, stockIn(YARD_ID) + take);
+        left -= take;
+        legs.push({ holderId: YARD_ID, n: take });
+      }
+      return { placed: n - left, legs };
+    };
+
+    // Remove up to n units for a buyer at `center`: warehouses nearest the
+    // buyer drain first, the yard last. Returns { taken, legs: [{holderId, n}] }.
+    const drainStock = (n, center) => {
+      const legs = [];
+      let left = n;
+      for (const id of [...warehousesNear(center), YARD_ID]) {
+        if (left <= 0) break;
+        const take = Math.min(left, stockIn(id));
+        if (take > 0) { setStock(id, stockIn(id) - take); left -= take; legs.push({ holderId: id, n: take }); }
+      }
+      return { taken: n - left, legs };
+    };
+
+    // ---- Load / migrate stock ----
+    // Per-holder stock lives under STOCK_KEY. A legacy scalar total (the old
+    // PRODUCTS_KEY) is distributed once — warehouses first, yard last, clamped
+    // by real capacities; the legacy key is left in place (non-destructive,
+    // same policy as the claims migration).
+    (() => {
+      let loaded = false;
+      try {
+        const raw = localStorage.getItem(STOCK_KEY);
+        if (raw !== null) {
+          for (const [k, v] of Object.entries(JSON.parse(raw))) {
+            const n = Number(v);
+            if (Number.isFinite(n) && n > 0) stock.set(k, Math.floor(n));
+          }
+          loaded = true;
+        }
+      } catch (_) { stock.clear(); loaded = false; }
+      if (!loaded) {
+        const legacy = Math.max(0, Number(localStorage.getItem(PRODUCTS_KEY)) || 0);
+        if (legacy > 0) allocateStock(legacy, null);
+      }
+      // Clamp to live capacities (buildings may have changed off-session;
+      // stale holder ids have capacity 0 and vanish)
+      for (const id of [...stock.keys()]) {
+        if (stockIn(id) > capacityOf(id)) setStock(id, capacityOf(id));
+      }
+      products = totalStock();
+      saveStock();
+    })();
+    updateProductDisplay();
+
+    // ---- NPC company market ----
+    // Companies are a PURE FUNCTION of each building's stable id (FNV-1a
+    // hash), so they exist anywhere in the world without pre-generation or
+    // storage: spawn at any location and the nearest buildings already have
+    // deterministic companies. Only volatile state (price drift + remaining
+    // demand) is held in memory, keyed by id, created on demand — memory
+    // scales with companies near the camera, not the world.
+    const MARKET = {
+      DENSITY: 18,                         // 1-in-N candidate buildings host a company (tuned: 14 within 2 km of Chatteris)
+      PRICE_MIN: 18, PRICE_SPAN: 23,      // base price per product: $18–$40 inclusive
+      DRIFT_STEP: 0.08,                   // per-tick random drift step
+      DRIFT_MAX: 0.25,                    // price clamped to ±25% of base
+      HOT: 0.15,                          // 🔥 hot buyer marker above +15%
+      AREA_MIN: 250, AREA_MAX: 4000,      // company footprint range (m²)
+      RADIUS_M: 2000,                     // local roster radius around the camera
+      DEMAND_MIN: 5, DEMAND_MAX: 60,      // per-tick demand clamps
+      BUYOUT_PER_M2: 60                   // 4× the office price ($10/m² × costMult 1.5)
+    };
+
+    // FNV-1a 32-bit string hash — deterministic across sessions & platforms
+    const hash32 = (str) => {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return h >>> 0;
+    };
+
+    const SECTORS = ['Packaging', 'Food', 'Logistics', 'Electronics', 'Precision Eng.',
+      'Retail', 'Agritech', 'Furniture', 'Chemicals', 'Printing'];
+
+    // Flavour-name word lists per locale. Adding a region later is additive
+    // data, not code; real OSM names win over generated ones when present.
+    const NAME_LOCALES = {
+      UK_EN: {
+        A: ['Fenland', 'Whittlesey', 'Ely', 'March', 'Nene', 'Ramsey', 'Alder', 'Cedar',
+          'Meadow', 'Stone', 'Harvest', 'Crown', 'Oakfield', 'Brook', 'Holt', 'Northern'],
+        B: ['Packaging', 'Foods', 'Logistics', 'Engineering', 'Electronics', 'Agri',
+          'Print', 'Textiles', 'Marketing', 'Consulting', 'Interiors', 'Chemical',
+          'Dairy', 'Grain', 'Steel', 'Design'],
+        S: [' Ltd', ' & Co', ' Group', ' PLC', ' Partners', '']
+      }
+    };
+    const NAME_LOCALE = NAME_LOCALES.UK_EN;
+
+    // Approximate footprint centre (ring average — only used for sorting)
+    const centroidOf = (geometry) => {
+      const ring = geometry.type === 'Polygon' ? geometry.coordinates[0]
+        : (geometry.type === 'MultiPolygon' && geometry.coordinates.length ? geometry.coordinates[0][0] : null);
+      if (!ring || !ring.length) return [0, 0];
+      let x = 0, y = 0;
+      for (const p of ring) { x += p[0]; y += p[1]; }
+      return [x / ring.length, y / ring.length];
+    };
+
+
+    const companyCache = new Map();     // site id -> company | null (pure decision, memoized)
+    const forcedCompanies = new Map();  // site id -> company (relocated there by a buyout)
+    const marketState = new Map();      // site id -> { drift, demand, cap }
+
+    // Deterministic per-building company decision. Null for owned buildings,
+    // wrong-size footprints, and every building failing the density hash.
+    const companyFor = (f) => {
+      const id = f.properties && f.properties.id;
+      if (!id || !f.geometry) return null;
+      if (companyCache.has(id)) return companyCache.get(id);
+      let co = null;
+      if (!owned.has(id)) {
+        if (forcedCompanies.has(id)) {
+          co = forcedCompanies.get(id);
+        } else {
+          const area = areaOf(id, f.geometry);
+          if (area >= MARKET.AREA_MIN && area <= MARKET.AREA_MAX &&
+              hash32(id + ':site') % MARKET.DENSITY === 0) {
+            const p = f.properties;
+            const name = p.name || (
+              NAME_LOCALE.A[hash32(id + ':a') % NAME_LOCALE.A.length] + ' ' +
+              NAME_LOCALE.B[hash32(id + ':b') % NAME_LOCALE.B.length] +
+              NAME_LOCALE.S[hash32(id + ':s') % NAME_LOCALE.S.length]);
+            co = {
+              id, name,
+              sector: SECTORS[hash32(id + ':sector') % SECTORS.length],
+              base: MARKET.PRICE_MIN + (hash32(id + ':price') % MARKET.PRICE_SPAN),
+              area,
+              centroid: centroidOf(f.geometry)
+            };
+          }
         }
       }
-      return geomById.get(id) || null;
+      companyCache.set(id, co);
+      return co;
     };
+
+    // Demand per tick: round(area/60) + 3, clamped 5–60; refilled every tick
+    const demandCapFor = (area) =>
+      Math.max(MARKET.DEMAND_MIN, Math.min(MARKET.DEMAND_MAX, Math.round(area / 60) + 3));
+
+    const stateFor = (co) => {
+      let s = marketState.get(co.id);
+      if (!s) {
+        const cap = demandCapFor(co.area);
+        s = { drift: 0, demand: cap, cap };
+        marketState.set(co.id, s);
+      }
+      return s;
+    };
+
+    // HQ bonus extends to sale prices (same +10% as production & office income)
+    const hqSaleBonus = () => (hqId !== null ? 1 + BUILDING_CLASSES.hq.globalBonus : 1);
+    const companyPrice = (co, s) => Math.round(co.base * (1 + s.drift) * hqSaleBonus());
+
+    // Market tick: random walk the drift (clamped ±25%), refill demand
+    const tickMarket = () => {
+      for (const s of marketState.values()) {
+        s.drift = Math.max(-MARKET.DRIFT_MAX,
+          Math.min(MARKET.DRIFT_MAX, s.drift + (Math.random() * 2 - 1) * MARKET.DRIFT_STEP));
+        s.demand = s.cap;
+      }
+    };
+
+    // Roster query: companies within radiusM of a centre (planar, cos-lat
+    // scaled), nearest first. Against the Footprints seam — when the seam is
+    // backed by a spatial index this stops scanning everything.
+    const companiesNear = (center, radiusM) => {
+      const out = [];
+      const cosLat = Math.cos(center[1] * Math.PI / 180) * 111320;
+      for (const f of Footprints.all()) {
+        const co = companyFor(f);
+        if (!co) continue;
+        const dx = (co.centroid[0] - center[0]) * cosLat;
+        const dy = (co.centroid[1] - center[1]) * 111320;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= radiusM * radiusM) out.push([d2, co]);
+      }
+      out.sort((a, b) => a[0] - b[0]);
+      return out.map((x) => x[1]);
+    };
+
+    // Sell qty products to a company (clamped by remaining demand & stock).
+    // Sourcing: warehouses nearest the buyer drain first, the yard last —
+    // each contributing source animates a 📦 hop to the buyer.
+    const sellTo = (co, qty) => {
+      const s = stateFor(co);
+      const n = Math.max(0, Math.min(qty, s.demand, products));
+      if (n <= 0) return 0;
+      const { taken, legs } = drainStock(n, co.centroid);
+      const cash = taken * companyPrice(co, s);
+      s.demand -= taken;
+      wallet += cash;
+      for (const leg of legs) {
+        const g = leg.holderId === YARD_ID ? null : geometryFor(leg.holderId);
+        const from = g ? centroidOf(g)
+          : (hqId !== null && geometryFor(hqId) ? centroidOf(geometryFor(hqId)) : null);
+        // Yard shipments leave from the HQ (the yard's visual anchor); with no
+        // HQ either, skip the animation rather than fake an origin.
+        if (from) spawnBoxes(from, co.centroid, leg.n, BOX_SALE_MS);
+      }
+      syncProducts();
+      saveWallet();
+      updateWalletDisplay();
+      return cash;
+    };
+
+    // Greedy fill: sell everything to the highest-paying companies first
+    const sellAllBest = () => {
+      let total = 0;
+      const byPrice = [...marketRoster]
+        .sort((a, b) => companyPrice(b, stateFor(b)) - companyPrice(a, stateFor(a)));
+      for (const co of byPrice) {
+        if (products <= 0) break;
+        total += sellTo(co, stateFor(co).demand);
+      }
+      return total;
+    };
+
+    const companyBuyoutPrice = (co) => Math.round(co.area * MARKET.BUYOUT_PER_M2);
+
+    // Buy the company's site: the building becomes a player-owned office and
+    // the company relocates to the nearest unowned candidate site (keeping
+    // its name, sector and base price — visible as the same company moving).
+    const buyoutCompany = (co) => {
+      const price = companyBuyoutPrice(co);
+      if (wallet < price || owned.has(co.id)) return false;
+      wallet -= price;
+      owned.set(co.id, { cls: 'office', ts: Date.now(), lines: 0 });
+      saveWallet();
+      saveOwned();
+      updateWalletDisplay();
+      updateOwnedDisplay();
+      try { map.removeFeatureState({ source: 'osm-buildings', id: co.id }, 'co'); } catch (_) {}
+      applyOwnershipState(co.id, 'office');
+      companyCache.set(co.id, null);
+      marketState.delete(co.id);
+
+      let best = null, bestD2 = Infinity;
+      const cosLat = Math.cos(co.centroid[1] * Math.PI / 180) * 111320;
+      for (const f of Footprints.all()) {
+        const c2 = companyFor(f);
+        if (!c2 || c2.id === co.id) continue;
+        const dx = (c2.centroid[0] - co.centroid[0]) * cosLat;
+        const dy = (c2.centroid[1] - co.centroid[1]) * 111320;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestD2) { bestD2 = d2; best = c2; }
+      }
+      if (best) {
+        forcedCompanies.set(best.id,
+          { ...best, name: co.name, sector: co.sector, base: co.base });
+        companyCache.delete(best.id);   // drop its cached hash-decision
+      }
+      refreshMarket();
+      return true;
+    };
+
+    // ---- Selling buildings back ----
+    // Buildings resell at SELL_BACK of their buy price. Selling a warehouse
+    // spills its contents into the remaining storage (other warehouses
+    // nearest-first, then the yard); only TRUE overflow past all remaining
+    // capacity is auto-sold to the NEAREST NPC business (the roster is
+    // nearest-first) at its current price — with no company nearby the excess
+    // is scrapped silently. Selling the HQ clears the unique slot.
+    const SELL_BACK = 0.5;
+    const resalePrice = (id, geometry) => {
+      const rec = owned.get(id);
+      const cls = rec ? rec.cls : 'factory';
+      const cfg = BUILDING_CLASSES[cls] || BUILDING_CLASSES.factory;
+      return Math.round(areaOf(id, geometry) * PRICE_PER_M2 * cfg.costMult * SELL_BACK);
+    };
+    const sellBuilding = (id, geometry) => {
+      const rec = owned.get(id);
+      if (!rec || !geometry) return null;
+      const cls = rec.cls;
+      const refund = resalePrice(id, geometry);   // reads `rec` — before the delete below
+
+      // Drop ownership FIRST so spill allocation never targets the sold
+      // building itself.
+      owned.delete(id);
+
+      let liquidated = 0, liquidationCash = 0, buyerName = null;
+      if (cls === 'warehouse') {
+        const geom0 = geometryFor(id);
+        const center = geom0 ? centroidOf(geom0) : null;
+        const contents = stockIn(id);
+        setStock(id, 0);
+        let left = contents;
+        if (left > 0) {
+          const { placed, legs } = allocateStock(left, center);
+          left -= placed;
+          for (const leg of legs) {
+            if (leg.holderId === YARD_ID) continue;      // virtual yard — no hop
+            const wg = geometryFor(leg.holderId);
+            if (wg && center) spawnBoxes(center, centroidOf(wg), leg.n, BOX_PROD_MS);
+          }
+        }
+        if (left > 0) {
+          liquidated = left;                             // true overflow only
+          const buyer = marketRoster[0];
+          if (buyer) {
+            const s = stateFor(buyer);
+            liquidationCash = Math.round(liquidated * companyPrice(buyer, s));
+            s.demand = Math.max(0, s.demand - liquidated);
+            buyerName = buyer.name;
+            if (center) spawnBoxes(center, buyer.centroid, liquidated, BOX_SALE_MS);
+          }
+        }
+        syncProducts();
+      }
+
+      if (hqId === id) { hqId = null; saveHq(); }
+      saveOwned();
+      wallet += refund + liquidationCash;
+      saveWallet();
+      try { map.removeFeatureState({ source: 'osm-buildings', id }, 'cls'); } catch (_) {}
+      if (cls === 'factory') refreshBelts();
+      updateOwnedDisplay();
+      updateWalletDisplay();
+      updateProductDisplay();
+      if (marketPanelOpen) renderMarketPanel();
+      return { refund, liquidated, liquidationCash, buyerName };
+    };
+
+    // ---- Roster <-> map feature states (teal `co: 1`), camera-driven ----
+    let marketRoster = [];
+    const appliedCoStates = new Set();
+    const refreshMarket = () => {
+      const c = map.getCenter();
+      marketRoster = companiesNear([c.lng, c.lat], MARKET.RADIUS_M);
+      for (const id of [...appliedCoStates]) {
+        if (!marketRoster.some((co) => co.id === id)) {
+          try { map.removeFeatureState({ source: 'osm-buildings', id }, 'co'); } catch (_) {}
+          appliedCoStates.delete(id);
+        }
+      }
+      for (const co of marketRoster) {
+        if (!appliedCoStates.has(co.id)) {
+          try { map.setFeatureState({ source: 'osm-buildings', id: co.id }, { co: 1 }); } catch (_) {}
+          appliedCoStates.add(co.id);
+        }
+      }
+      updateMarketButton();
+      if (marketPanelOpen) renderMarketPanel();
+    };
+
+    // ---- Market panel UI ----
+    const marketPanel = document.getElementById('market-panel');
+    const marketToggleBtn = document.getElementById('market-toggle');
+    let marketPanelOpen = false;
+
+    const updateMarketButton = () => {
+      marketToggleBtn.textContent = `Market (${marketRoster.length})`;
+    };
+    const escHtml = (t) => String(t)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const trendArrow = (s) => (s.drift > 0.02 ? '▲' : s.drift < -0.02 ? '▼' : '—');
+
+    const renderMarketPanel = () => {
+      if (!marketPanelOpen) return;
+      const rows = marketRoster.map((co) => {
+        const s = stateFor(co);
+        const price = companyPrice(co, s);
+        const buyout = companyBuyoutPrice(co);
+        const canSell = s.demand > 0 && products > 0;
+        return `
+          <div class="market-row${s.drift >= MARKET.HOT ? ' hot' : ''}" data-co="${co.id}">
+            <div class="market-name"><span class="co-badge">NPC</span>${escHtml(co.name)}${s.drift >= MARKET.HOT ? ' 🔥' : ''}<span class="market-sector">${escHtml(co.sector)}</span></div>
+            <div class="market-stats">$${price} <span class="trend">${trendArrow(s)}</span> · demand ${s.demand}/${s.cap}</div>
+            <div class="market-actions">
+              <button data-sell="10" ${canSell ? '' : 'disabled'}>Sell 10</button>
+              <button data-sell="all" ${canSell ? '' : 'disabled'}>Sell all</button>
+              <button data-buyout="1" title="Buy this site — the company relocates" ${wallet >= buyout ? '' : 'disabled'}>Buy site $${buyout.toLocaleString()}</button>
+            </div>
+          </div>`;
+      }).join('');
+      marketPanel.innerHTML = `
+        <div class="market-head">
+          <strong>Local companies</strong>
+          <span class="market-sub">within ${Math.round(MARKET.RADIUS_M / 1000)} km · storage ${products.toLocaleString()} / ${totalCapacity().toLocaleString()}</span>
+          <button id="market-sell-best" ${products > 0 ? '' : 'disabled'}>Sell all (best first)</button>
+        </div>
+        ${rows || '<div class="market-sub">No companies nearby.</div>'}`;
+      marketPanel.querySelectorAll('button[data-sell]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const co = marketRoster.find((c) => c.id === btn.closest('.market-row').dataset.co);
+          if (!co) return;
+          sellTo(co, btn.dataset.sell === 'all' ? stateFor(co).demand : 10);
+          renderMarketPanel();
+        });
+      });
+      const bestBtn = marketPanel.querySelector('#market-sell-best');
+      if (bestBtn) bestBtn.addEventListener('click', () => { sellAllBest(); renderMarketPanel(); });
+      marketPanel.querySelectorAll('button[data-buyout]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const co = marketRoster.find((c) => c.id === btn.closest('.market-row').dataset.co);
+          if (co && buyoutCompany(co)) renderMarketPanel();
+        });
+      });
+    };
+
+    marketToggleBtn.addEventListener('click', () => {
+      marketPanelOpen = !marketPanelOpen;
+      marketPanel.style.display = marketPanelOpen ? 'block' : 'none';
+      if (marketPanelOpen) renderMarketPanel();
+    });
+
+    // Keep the roster local to the camera: refresh (debounced) after pans.
+    let marketMoveTimer = null;
+    map.on('moveend', () => {
+      clearTimeout(marketMoveTimer);
+      marketMoveTimer = setTimeout(refreshMarket, 250);
+    });
+    refreshMarket();
 
     // Production tick: every 10s factories produce products and offices earn cash
     setInterval(() => {
-      const lines = totalLines();
       const mult = factoryOutputMult();
-      if (lines > 0) {
-        products += Math.round(lines * BUILDING_CLASSES.factory.outputPerTick * mult);
-        localStorage.setItem(PRODUCTS_KEY, String(products));
-        updateProductDisplay();
+      for (const [id, rec] of owned) {
+        if (rec.cls !== 'factory' || !rec.lines) continue;
+        // Storage is a hard ceiling per holder: output goes to the nearest
+        // warehouse with room, then the yard; nowhere has room -> not made.
+        const made = Math.round(rec.lines * BUILDING_CLASSES.factory.outputPerTick * mult);
+        if (made <= 0) continue;
+        const geom = geometryFor(id);
+        const from = geom ? centroidOf(geom) : null;
+        const { legs } = allocateStock(made, from);
+        for (const leg of legs) {
+          if (leg.holderId === YARD_ID) continue;        // virtual yard — no hop
+          const wg = geometryFor(leg.holderId);
+          if (wg && from) spawnBoxes(from, centroidOf(wg), leg.n, BOX_PROD_MS);
+        }
       }
+      syncProducts();
       let officeCash = 0;
       for (const [id, rec] of owned) {
         if (rec.cls !== 'office') continue;
@@ -496,6 +1097,9 @@
         saveWallet();
         updateWalletDisplay();
       }
+      // Market tick rides along with production: drift prices, refill demand
+      tickMarket();
+      if (marketPanelOpen) renderMarketPanel();
     }, TICK_MS);
 
     // Apply persisted ownership to the map's feature states
@@ -530,8 +1134,21 @@
       saveWallet();
       updateWalletDisplay();
       products = 0;
+      stock.clear();
+      for (const b of boxes) if (b.view) b.view.destroy();
+      boxes.length = 0;
+      localStorage.setItem(STOCK_KEY, '{}');
       localStorage.setItem(PRODUCTS_KEY, '0');
       updateProductDisplay();
+      // Market state is volatile by design — a reset regenerates it cleanly
+      marketState.clear();
+      companyCache.clear();
+      forcedCompanies.clear();
+      for (const id of appliedCoStates) {
+        try { map.removeFeatureState({ source: 'osm-buildings', id }, 'co'); } catch (_) {}
+      }
+      appliedCoStates.clear();
+      refreshMarket();
       refreshBelts();
       resetBtn.classList.remove('confirm');
       resetBtn.textContent = 'Reset';
@@ -559,9 +1176,15 @@
         bits.push(`⚑ ${cfg.label.toLowerCase()}`);
         if (rec.cls === 'factory' && rec.lines) bits.push(`🏭 ${rec.lines}`);
       } else {
-        // "from" price = cheapest class the player can currently buy
-        const minCls = hqId !== null ? 'warehouse' : 'hq';
-        bits.push(`from ≈ $${buildingPrice(f, minCls).toLocaleString()}`);
+        const co = companyFor(f);
+        if (co) {
+          const s = stateFor(co);
+          bits.push(`${co.name} · ${co.sector} · pays $${companyPrice(co, s)} (demand ${s.demand})`);
+        } else {
+          // "from" price = cheapest class the player can currently buy
+          const minCls = hqId !== null ? 'warehouse' : 'hq';
+          bits.push(`from ≈ $${buildingPrice(f, minCls).toLocaleString()}`);
+        }
       }
       return bits.length ? bits.join(' · ') : `Building #${p.osm_id}`;
     };
@@ -577,7 +1200,8 @@
         features: [{
           type: 'Feature',
           geometry: f.geometry,
-          properties: { ...f.properties, cls: (owned.get(f.properties.id) || {}).cls }
+          properties: { ...f.properties, cls: (owned.get(f.properties.id) || {}).cls,
+            co: companyFor(f) ? 1 : 0 }
         }]
       });
       hoveredGeom = f.geometry;
@@ -655,6 +1279,17 @@
       menuFeature = null;
     };
 
+    // Wire the shared "Sell building" button in the owned menu view. Selling
+    // re-renders the menu, which now shows the buy view (building un-owned).
+    const wireSellButton = () => {
+      const btn = buildingMenu.querySelector('#sell-building');
+      if (!btn) return;
+      btn.addEventListener('click', () => {
+        if (!menuFeature || !menuBuildingId) return;
+        if (sellBuilding(menuBuildingId, menuFeature.geometry)) renderBuildingMenu();
+      });
+    };
+
     const renderBuildingMenu = () => {
       if (!menuFeature) return;
       const id = menuBuildingId;
@@ -662,6 +1297,35 @@
 
       // ---- Unowned: BUY menu (with the strict headquarters-first lock) ----
       if (!rec) {
+        // Company sites get a market view (sell / buyout) instead of buy rows —
+        // buying the site IS the buyout, which turns it into an office.
+        const co = companyFor(menuFeature);
+        if (co) {
+          const s = stateFor(co);
+          const price = companyPrice(co, s);
+          const buyout = companyBuyoutPrice(co);
+          const n10 = Math.min(10, s.demand, products);
+          buildingMenu.innerHTML = `
+            <h4>${escHtml(co.name)}<span class="badge" style="background:#2f9e8f">Company</span></h4>
+            <div class="row">${escHtml(co.sector)} · ${Math.round(co.area).toLocaleString()} m² office</div>
+            <div class="row">Pays <strong>$${price}</strong> / product · demand ${s.demand}/${s.cap} per tick</div>
+            <button data-sell="10" ${n10 > 0 ? '' : 'disabled'}>Sell ${n10} products (+$${(n10 * price).toLocaleString()})</button>
+            <button data-sell="all" ${s.demand > 0 && products > 0 ? '' : 'disabled'}>Sell to demand (+$${(Math.min(s.demand, products) * price).toLocaleString()})</button>
+            <button data-buyout="1" ${wallet >= buyout ? '' : 'disabled'}
+                    title="Buy the building as an office — the company relocates nearby">
+              Buy site $${buyout.toLocaleString()}
+            </button>`;
+          buildingMenu.querySelectorAll('button[data-sell]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+              sellTo(co, btn.dataset.sell === 'all' ? s.demand : 10);
+              renderBuildingMenu();
+            });
+          });
+          buildingMenu.querySelector('button[data-buyout]').addEventListener('click', () => {
+            if (buyoutCompany(co)) renderBuildingMenu();
+          });
+          return;
+        }
         const rows = [];
         for (const [key, cfg] of Object.entries(BUILDING_CLASSES)) {
           if (cfg.unique && hqId !== null) continue;          // HQ row hidden once owned
@@ -700,6 +1364,7 @@
             if (cfg.unique) { hqId = menuBuildingId; saveHq(); }
             saveOwned();
             updateOwnedDisplay();
+            updateProductDisplay();  // warehouse purchases raise the storage cap
             applyOwnershipState(menuBuildingId, cls);
             renderBuildingMenu();                             // re-render as the owned view
           });
@@ -718,13 +1383,24 @@
         const lineCost = cfg.lineCost;
         const canAdd = lines < cap && wallet >= lineCost;
         const reason = lines >= cap ? ' (at capacity)' : wallet < lineCost ? ' (not enough funds)' : '';
+        const whIds = warehousesNear(centroidOf(menuFeature.geometry));
+        const storageRow = `Storage: ${products.toLocaleString()} / ${totalCapacity().toLocaleString()}` +
+          (products >= totalCapacity() ? ' · full — build a warehouse' : '');
+        const deliveryRow = whIds.length
+          ? `📦 Deliveries go to the nearest warehouse (of ${whIds.length})`
+          : 'No warehouse yet — output fills the yard';
         buildingMenu.innerHTML = `
           ${header}
           <div class="row">Factory lines: <strong>${lines} / ${cap}</strong></div>
           <div class="row">Output: ${Math.round(lines * factoryOutputMult())} product${lines === 1 ? '' : 's'} / 10s</div>
+          <div class="row">${storageRow}</div>
+          <div class="row">${deliveryRow}</div>
           ${lines < cap ? `<div class="row">Next line: $${lineCost.toLocaleString()}</div>` : ''}
           <button id="add-factory-line" ${canAdd ? '' : 'disabled'}>
             + Add factory line${reason}
+          </button>
+          <button id="sell-building" title="Refund: half the buy price. Factory lines are lost.">
+            Sell building for $${resalePrice(id, menuFeature.geometry).toLocaleString()}
           </button>`;
         buildingMenu.querySelector('#add-factory-line').addEventListener('click', () => {
           const r = owned.get(menuBuildingId);
@@ -738,22 +1414,29 @@
           saveOwned();
           renderBuildingMenu();
         });
+        wireSellButton();
         return;
       }
 
-      // Warehouse / office / HQ: information only (conversion & selling are
-      // deferred features — hooks live in BUILDING_CLASSES).
+      // Warehouse / office / HQ: info + sell (selling a warehouse spills its
+      // contents into remaining storage; true overflow auto-sells to the
+      // nearest NPC business).
       let effect;
       if (rec.cls === 'warehouse') {
-        effect = `+${Math.round(cfg.outputMultBonus * 100)}% factory output (now ×${factoryOutputMult().toFixed(2)})`;
+        const cap = warehouseStorage(areaOf(id, menuFeature.geometry));
+        effect = `Stores ≈ ${cap.toLocaleString()} · Holding ${stockIn(id).toLocaleString()} / ${cap.toLocaleString()}`;
       } else if (rec.cls === 'office') {
         const perTick = Math.round(areaOf(id, menuFeature.geometry) * cfg.cashPerM2PerTick *
           (hqId !== null ? 1 + BUILDING_CLASSES.hq.globalBonus : 1));
         effect = `≈ $${perTick.toLocaleString()} / 10s`;
       } else {
-        effect = `+${Math.round(cfg.globalBonus * 100)}% to all production and office income`;
+        effect = `+${Math.round(cfg.globalBonus * 100)}% to all production, office income and sale prices`;
       }
-      buildingMenu.innerHTML = `${header}<div class="row">${effect}</div>`;
+      buildingMenu.innerHTML = `${header}<div class="row">${effect}</div>
+        <button id="sell-building" title="Refund: half the buy price.${rec.cls === 'warehouse' ? ' Contents spill into remaining storage (yard + warehouses); true overflow auto-sells to the nearest company.' : rec.cls === 'hq' ? ' You will need a new HQ before buying anything else.' : ''}">
+          Sell building for $${resalePrice(id, menuFeature.geometry).toLocaleString()}
+        </button>`;
+      wireSellButton();
     };
 
     map.on('contextmenu', 'osm-buildings-fill', (e) => {
@@ -977,6 +1660,107 @@
       beltContainers.clear();
     };
 
+    // ---- Animated 📦 deliveries (factory→warehouse, storage→buyer) ----
+    // Boxes live in lng/lat and are re-projected every frame, so they stay
+    // glued to buildings through pans and zooms. Each box is one quadratic
+    // bezier hop (smoothstep-eased, capped perpendicular lift), staggered
+    // 90 ms apart, capped at MAX_BOXES live entries, ~20 px screen-space so
+    // they read at any zoom. Rendering goes through BOX_VISUALS.make() so
+    // swapping the emoji for a pixel-art crate is pure data: add a `box`
+    // asset to MACHINE_ASSETS (see build-machines-data.mjs) — zero code
+    // edits here.
+    const MAX_BOXES = 60;
+    const BOX_STAGGER_MS = 90;
+    const BOX_PROD_MS = 1400;        // short/fast hop: production & spill
+    const BOX_SALE_MS = 1800;        // longer hop: sale to an NPC buyer
+    const BOX_FONT_PX = 20;
+
+    const boxes = [];                // live entries: { from, to, start, dur, view }
+    let boxRoot = null;              // PIXI container (created with the overlay)
+    let boxTexture = null;           // set once a MACHINE_ASSETS.box sprite loads
+
+    // Pure maths (unit-tested): position along the hop at time `now` as
+    // [lng, lat]. t is clamped to 0..1, eased with smoothstep, and the bezier
+    // control point lifts perpendicular off the straight line (lift capped so
+    // short hops don't over-arc).
+    const boxPointAt = (b, now) => {
+      const t = Math.max(0, Math.min(1, (now - b.start) / b.dur));
+      const ease = t * t * (3 - 2 * t);
+      const dx = b.to[0] - b.from[0], dy = b.to[1] - b.from[1];
+      const lift = Math.min(0.15, Math.hypot(dx, dy) * 0.1);
+      const cx = (b.from[0] + b.to[0]) / 2 - dy * lift;
+      const cy = (b.from[1] + b.to[1]) / 2 + dx * lift;
+      const u = 1 - ease;
+      return [
+        u * u * b.from[0] + 2 * u * ease * cx + ease * ease * b.to[0],
+        u * u * b.from[1] + 2 * u * ease * cy + ease * ease * b.to[1]
+      ];
+    };
+
+    // Queue one shipment as up to 5 coalesced boxes (n units -> min(n,5) 📦),
+    // 90 ms apart. Only animates when the destination is near the viewport —
+    // off-camera deliveries still happen, they just aren't drawn.
+    const spawnBoxes = (from, to, units, dur) => {
+      if (!pixiApp || !boxRoot || !map) return;
+      const n = Math.max(1, Math.min(5, units));
+      const w = pixiApp.screen.width, h = pixiApp.screen.height, pad = 200;
+      const p = map.project([to[0], to[1]]);
+      if (p.x < -pad || p.y < -pad || p.x > w + pad || p.y > h + pad) return;
+      const now = performance.now();
+      for (let i = 0; i < n; i++) {
+        boxes.push({ from: [from[0], from[1]], to: [to[0], to[1]],
+          start: now + i * BOX_STAGGER_MS, dur, view: null });
+      }
+      while (boxes.length > MAX_BOXES) {
+        const oldest = boxes.shift();                // drop the most-finished first
+        if (oldest.view) oldest.view.destroy();
+      }
+    };
+
+    // The single seam between the boxes subsystem and how a box LOOKS.
+    // Today: 📦 emoji text. Tomorrow (automatic): if MACHINE_ASSETS.box exists
+    // with { image, frameWidth, frameHeight }, the sprite loads once and every
+    // new box renders from it, scaled to the same ~20 px screen height.
+    const BOX_VISUALS = {
+      make: () => {
+        if (boxTexture) {
+          const s = new PIXI.Sprite(boxTexture);
+          s.anchor.set(0.5);
+          s.scale.set((BOX_FONT_PX + 6) / boxTexture.height);
+          return s;
+        }
+        const t = new PIXI.Text({ text: '📦', style: { fontSize: BOX_FONT_PX } });
+        t.anchor.set(0.5);
+        return t;
+      }
+    };
+
+    // Per-frame: advance boxes, project to screen space, cull off-screen.
+    const renderBoxes = () => {
+      if (!pixiApp || !boxRoot) return;
+      const now = performance.now();
+      const w = pixiApp.screen.width, h = pixiApp.screen.height;
+      for (let i = boxes.length - 1; i >= 0; i--) {
+        const b = boxes[i];
+        if (now > b.start + b.dur) {
+          if (b.view) b.view.destroy();
+          boxes.splice(i, 1);
+          continue;
+        }
+        if (now < b.start) continue;                 // staggered — not launched yet
+        const [lng, lat] = boxPointAt(b, now);
+        const p = map.project([lng, lat]);
+        const on = p.x >= -40 && p.y >= -40 && p.x <= w + 40 && p.y <= h + 40;
+        if (!b.view) {
+          if (!on) continue;                         // create the view lazily
+          b.view = BOX_VISUALS.make();
+          boxRoot.addChild(b.view);
+        }
+        b.view.visible = on;
+        if (on) b.view.position.set(p.x, p.y);
+      }
+    };
+
     (async () => {
       try {
         pixiApp = new PIXI.Application();
@@ -1002,7 +1786,20 @@
 
         beltRoot = new PIXI.Container();
         pixiApp.stage.addChild(beltRoot);
+        boxRoot = new PIXI.Container();
+        pixiApp.stage.addChild(boxRoot);
+
+        // Optional crate sprite: present in MACHINE_ASSETS -> boxes auto-swap
+        // from the 📦 emoji to the pixel-art sprite (BOX_VISUALS seam).
+        const boxAsset = window.MACHINE_ASSETS && window.MACHINE_ASSETS.box;
+        if (boxAsset && boxAsset.image) {
+          const tex = await PIXI.Assets.load(boxAsset.image);
+          tex.source.scaleMode = 'nearest';
+          boxTexture = tex;
+        }
+
         pixiApp.ticker.add(() => renderBelts());
+        pixiApp.ticker.add(() => renderBoxes());
       } catch (err) {
         console.warn('PixiJS overlay failed to initialise:', err);
       }
