@@ -1,13 +1,16 @@
-// Regenerates machines-data.js from the Piskel conveyor export.
+// Regenerates machines-data.js from the Piskel conveyor export and the
+// delivery-crate sprite.
 // Usage: node build-machines-data.mjs
 // (mirrors fetch-buildings.mjs — keeps the game working from file://)
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const SRC_PNG = 'pixel art/conveyor/conveyor.png';
 const SRC_JSON = 'pixel art/conveyor/conveyor.json';
+const SRC_BOX_PNG = 'pixel art/box/box.png';
 const OUT = 'machines-data.js';
 
 const png = readFileSync(SRC_PNG);
+const boxPng = readFileSync(SRC_BOX_PNG);   // throws loudly if the crate goes missing
 const meta = JSON.parse(readFileSync(SRC_JSON, 'utf8'));
 
 // Sort frames numerically ("New Piskel10.png" would sort before
@@ -46,15 +49,16 @@ window.MACHINE_ASSETS = {
     // TilingSprites (one per row, animated via tilePosition) automatically.
     tile: null
   },
-  // Future: a box/crate sprite for animated deliveries between buildings
-  // (factory -> warehouse on production, storage -> NPC buyer on a sale).
-  // Shape expected by index.html's BOX_VISUALS seam — drop it in and every
-  // delivery swaps from the 📦 emoji to this sprite automatically:
-  //   box: { image: "data:image/png;base64,..." }   // whole-frame sprite
-  //   box: { image, frameWidth, frameHeight, frames: [{x,y}] }  // atlas form
-  box: null
+  // Crate sprite for the animated deliveries between buildings (factory ->
+  // warehouse on production, storage -> NPC buyer on a sale). Consumed by
+  // index.html's BOX_VISUALS seam: whole-image texture, nearest-neighbour,
+  // integer-scaled. If the source file is missing this build fails loudly —
+  // to fall back to the 📦 emoji instead, set 'box: null' here.
+  box: {
+    image: "data:image/png;base64,${boxPng.toString('base64')}"
+  }
 };
 `;
 
 writeFileSync(OUT, out);
-console.log(`Wrote ${OUT}: ${frames.length} frames, ${png.length}-byte PNG inlined`);
+console.log(`Wrote ${OUT}: ${frames.length} conveyor frames + ${boxPng.length}-byte crate sprite inlined`);

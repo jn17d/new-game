@@ -1665,10 +1665,10 @@
     // glued to buildings through pans and zooms. Each box is one quadratic
     // bezier hop (smoothstep-eased, capped perpendicular lift), staggered
     // 90 ms apart, capped at MAX_BOXES live entries, ~20 px screen-space so
-    // they read at any zoom. Rendering goes through BOX_VISUALS.make() so
-    // swapping the emoji for a pixel-art crate is pure data: add a `box`
-    // asset to MACHINE_ASSETS (see build-machines-data.mjs) — zero code
-    // edits here.
+    // deliveries, capped at MAX_BOXES live entries, ~20-32 px screen-space so
+    // they read at any zoom. Rendering goes through BOX_VISUALS.make() so the
+    // look is data-driven: the pixel-art crate from machines-data.js is used
+    // when present, the 📦 emoji otherwise (see build-machines-data.mjs).
     const MAX_BOXES = 60;
     const BOX_STAGGER_MS = 90;
     const BOX_PROD_MS = 1400;        // short/fast hop: production & spill
@@ -1718,15 +1718,16 @@
     };
 
     // The single seam between the boxes subsystem and how a box LOOKS.
-    // Today: 📦 emoji text. Tomorrow (automatic): if MACHINE_ASSETS.box exists
-    // with { image, frameWidth, frameHeight }, the sprite loads once and every
-    // new box renders from it, scaled to the same ~20 px screen height.
+    // Primary: the 32x32 pixel-art crate inlined by build-machines-data.mjs
+    // (nearest-neighbour, integer-scaled so it stays crisp). Fallback: the
+    // 📦 emoji text when the asset is absent.
     const BOX_VISUALS = {
       make: () => {
         if (boxTexture) {
           const s = new PIXI.Sprite(boxTexture);
           s.anchor.set(0.5);
-          s.scale.set((BOX_FONT_PX + 6) / boxTexture.height);
+          // Integer scale only — pixel art must never blur or shimmer.
+          s.scale.set(Math.max(1, Math.round((BOX_FONT_PX + 6) / boxTexture.height)));
           return s;
         }
         const t = new PIXI.Text({ text: '📦', style: { fontSize: BOX_FONT_PX } });
@@ -1789,8 +1790,8 @@
         boxRoot = new PIXI.Container();
         pixiApp.stage.addChild(boxRoot);
 
-        // Optional crate sprite: present in MACHINE_ASSETS -> boxes auto-swap
-        // from the 📦 emoji to the pixel-art sprite (BOX_VISUALS seam).
+        // Crate sprite from machines-data.js: present -> boxes render from it
+        // (nearest-neighbour); absent -> BOX_VISUALS falls back to the 📦 emoji.
         const boxAsset = window.MACHINE_ASSETS && window.MACHINE_ASSETS.box;
         if (boxAsset && boxAsset.image) {
           const tex = await PIXI.Assets.load(boxAsset.image);

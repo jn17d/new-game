@@ -16,5 +16,13 @@ window.MACHINE_ASSETS = {
     // Future: a seamless cap-less strip tile here switches belt runs to
     // TilingSprites (one per row, animated via tilePosition) automatically.
     tile: null
+  },
+  // Crate sprite for the animated deliveries between buildings (factory ->
+  // warehouse on production, storage -> NPC buyer on a sale). Consumed by
+  // index.html's BOX_VISUALS seam: whole-image texture, nearest-neighbour,
+  // integer-scaled. If the source file is missing this build fails loudly —
+  // to fall back to the 📦 emoji instead, set 'box: null' here.
+  box: {
+    image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACQElEQVR4AbzQvYoUQRSG4dY78BJEkN1wEwNDMRIMBCPvQaMVZAMDg03cSFNjUwPBSA0MDEwWTHYQxEvwEpSn4Rtquqqnu2f/4J06der8vNvXux3/9vb2/oUdR/RtiwXKpZ9e3u+HJOfsEwt+ZgkYHMy2GGWcuzr5uUwKZODZh+MujA3fRWJUwGJYZrEz3Dy4l7A6S4n0V0VFohLQBDWGDZfLY0pCr7rMErfYEEixZmj4c/q1g3gICQzzuWdG5iZfnmuBFKWpLBKPSXgjAfEQ85D5w/e1gAeFzjFIYOx9TEK92S2JDYEHrz530LCNpRJmwsyhxIbA6yf7anoJDegTjR8SaDx15ZfIjGd3b3QY1m8IeCQR3A2AuMU2ifS1FmdWJXD74WEHBUMRuRYtif1HR33ptuUKKgHJ45O3vcRQxH8ENUMiYTG8Ty1X0xTwQMJZ4ou4tyTksvjdi8cd1E7RFDg6fDraV0pYqjCnpZD7+e2LY5JK4NfHk75pSqIU0eBzZ2lO+SkqAQ0kIN5GJCxP3ZLlepoCP05/e+vmSPSF5/ipBLLczDJ2vwwqgTsHt/o9V7HcokrAYhJQcNlUAhaTgPhKBZ6/P+tgMUhcpMCb73+rcesvsFqtrkEFCScJ50WQ5dmRmWuBJFJAAsnveloM/ZktDpWAB4UQk4B4CZZCj1kQD2kKpEgT3JdIzFlsJrYKKMASiXK53ilmCRhSSvgakA8Wwz214ilmCxhkcHCPRLnYu7e5LBIoh1o0pHxPPHX+BwAA//+GSKWTAAAABklEQVQDAD/PU1B+JA2HAAAAAElFTkSuQmCC"
   }
 };
