@@ -7,21 +7,29 @@ import { readFileSync, writeFileSync } from 'node:fs';
 const SRC_PNG = 'pixel art/conveyor/conveyor.png';
 const SRC_JSON = 'pixel art/conveyor/conveyor.json';
 const SRC_BOX_PNG = 'pixel art/box/box.png';
+const SRC_FORKLIFT_PNG = 'pixel art/forklift/Forklift.png';
+const SRC_FORKLIFT_JSON = 'pixel art/forklift/Forklift.json';
 const OUT = 'machines-data.js';
 
 const png = readFileSync(SRC_PNG);
 const boxPng = readFileSync(SRC_BOX_PNG);   // throws loudly if the crate goes missing
 const meta = JSON.parse(readFileSync(SRC_JSON, 'utf8'));
+const forkliftPng = readFileSync(SRC_FORKLIFT_PNG);   // throws loudly if the art goes missing
+const forkliftMeta = JSON.parse(readFileSync(SRC_FORKLIFT_JSON, 'utf8'));
 
 // Sort frames numerically ("New Piskel10.png" would sort before
 // "New Piskel2.png" as plain strings — classic Piskel gotcha).
-const frames = Object.keys(meta.frames)
+const frameGrid = (m) => Object.keys(m.frames)
   .map((name) => {
     const digits = name.match(/(\d+)\.png$/);
-    return { n: digits ? parseInt(digits[1], 10) : 0, f: meta.frames[name].frame };
+    return { n: digits ? parseInt(digits[1], 10) : 0, f: m.frames[name].frame };
   })
   .sort((a, b) => a.n - b.n)
   .map(({ f }) => ({ x: f.x, y: f.y }));
+
+const frames = frameGrid(meta);
+const forkliftFrames = frameGrid(forkliftMeta);
+const f0 = forkliftMeta.frames[Object.keys(forkliftMeta.frames)[0]].frame;
 
 // Measured from the sprite (2026-09 pixel probe):
 // - content occupies x=5..26 (22px of 32), y=0..31
@@ -56,9 +64,28 @@ window.MACHINE_ASSETS = {
   // to fall back to the 📦 emoji instead, set 'box: null' here.
   box: {
     image: "data:image/png;base64,${boxPng.toString('base64')}"
+  },
+  // Forklift sprite for warehouse interiors. The sheet is an 11-frame 32x32
+  // Piskel export whose frames differ only by a 1 px body jiggle and the rear
+  // light colour, so the strip reads as two poses: tail lights dim (moving)
+  // and brake/reverse lights lit (slowing, backing out). The art faces UP —
+  // forks at -y — which is also -V in the interior's local frame, so index.html
+  // rotates it to the travel heading (see the FORKLIFT block). Consumed by the
+  // warehouse forklift router/renderer; if the source PNG is missing this build
+  // fails loudly.
+  forklift: {
+    image: "data:image/png;base64,${forkliftPng.toString('base64')}",
+    frames: ${JSON.stringify(forkliftFrames)},
+    frameWidth: ${f0.w},
+    frameHeight: ${f0.h},
+    facing: 'up',                            // forks point -y in the art
+    drive: [0, 1],                           // dim rear lights: rolling
+    brake: [8, 9],                           // lit rear lights: reversing
+    content: { x: 7, y: 1, w: 18, h: 31 }    // opaque bounds inside a frame
   }
 };
 `;
 
 writeFileSync(OUT, out);
-console.log(`Wrote ${OUT}: ${frames.length} conveyor frames + ${boxPng.length}-byte crate sprite inlined`);
+console.log(`Wrote ${OUT}: ${frames.length} conveyor frames, ` +
+  `${forkliftFrames.length} forklift frames + ${boxPng.length}-byte crate sprite inlined`);

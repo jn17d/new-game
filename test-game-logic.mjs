@@ -245,6 +245,8 @@ const makeMarket = (opts = {}) => {
     const updateWalletDisplay = () => {};
     const updateOwnedDisplay = () => {};
     const applyOwnershipState = () => {};
+    const refreshInteriors = () => {};
+    const refreshForklifts = () => {};
     const map = mapStub;
     const areaOfGeomLocal = ${areaOfGeom.toString()};
     const areaOf = (id, geometry) => areaOfGeomLocal(geometry);
@@ -448,6 +450,8 @@ const makeGame = (opts = {}) => {
     const updateWalletDisplay = () => {};
     const updateProductDisplay = () => {};
     const refreshBelts = () => {};
+    const refreshInteriors = () => {};
+    const refreshForklifts = () => {};
     let marketPanelOpen = false;
     const renderMarketPanel = () => {};
     const map = { removeFeatureState: () => {} };
@@ -753,6 +757,140 @@ console.log('19. delivery box maths (boxPointAt)');
   const capped = { from: [0, 0], to: [1, 0], start: 0, dur: 100 };
   const cm = boxPointAt(capped, 50);
   check('long hops cap the lift at 15% of the span', Math.abs(cm[1]) <= 0.15 * 1 + 1e-12);
+}
+console.log('20. warehouse forklifts (rack layout, route plan, pose loop)');
+{
+  const moduleSrc = grab(/const MODULE_M = \d+;/);
+  const racksCacheSrc = grab(/const racksCache = new Map\(\);/);
+  const racksSrc = grab(/const warehouseRackLayout = \(id, uMin, uMax, vMin, vMax, PX\) => \{[\s\S]*?\n    \};/);
+  const forkliftConstsSrc = grab(/const FORKLIFT_ART_SCALE = [\s\S]*?const FORKLIFT_JIGGLE_MS = \d+;/);
+  const poseSrc = grab(/const forkliftPoseAt = \(plan, tMs\) => \{[\s\S]*?\n    \};/);
+  const planSrc = grab(/const buildForkliftPlan = \(id, racks, PX, inFootprint\) => \{[\s\S]*?\n    \};/);
+  const randSrc = grab(/const seededRand = \(seed\) => \{[\s\S]*?\n    \};/);
+
+  const fn = new Function(
+    moduleSrc + '\n' + hash32Src + '\n' + randSrc + '\n' + racksCacheSrc + '\n'
+    + racksSrc + '\n' + forkliftConstsSrc + '\n' + poseSrc + '\n' + planSrc + '\n'
+    + 'return { warehouseRackLayout, buildForkliftPlan, forkliftPoseAt,'
+    + ' FORKLIFT_CREEP_MPS, FORKLIFT_DRIVE_MPS, FORKLIFT_REVERSE_MPS };'
+  )();
+  const { warehouseRackLayout, buildForkliftPlan, forkliftPoseAt,
+    FORKLIFT_CREEP_MPS } = fn;
+  const PX = 8;                        // interior local px per metre (32 / MODULE_M)
+  const inside = () => true;           // synthetic footprint contains everything
+
+  // Synthetic 40 m x 20 m warehouse centred on (0, 0), unrotated.
+  const racks = warehouseRackLayout('wT', -160, 160, -80, 80, PX);
+  check('rack layout: 4 stripes, 2 usable rack rows', racks.rows.length === 4 &&
+    racks.rackRows.length === 2);
+  check('rack layout: lane sits in the walkway beside each rack face',
+    racks.rackRows.every((r) => r.rackVEnd < r.laneV && r.laneV < r.vEnd));
+  check('rack layout: memoized per building id',
+    warehouseRackLayout('wT', -160, 160, -80, 80, PX) === racks);
+
+  // Regression guard: the segmentation must still match the formula that used
+  // to live inline in buildInterior's warehouse branch (identical floor art).
+  const legacy = (() => {
+    const rackUMin = -160 + 1.5 * PX, rackUMax = 160 - 1.5 * PX;
+    const range = Math.max(0, rackUMax - rackUMin);
+    const gapW = 2.2 * PX, gapCount = Math.max(0, Math.floor(range / (14 * PX)));
+    const useGapCount = Math.min(gapCount, 8);
+    const segW = Math.max(4 * PX, (range - useGapCount * gapW) / (useGapCount + 1));
+    const segs = [], gapCentres = [];
+    let segX = rackUMin;
+    for (let s = 0; s <= useGapCount; s++) {
+      const segEnd = segX + segW;
+      if (segEnd >= rackUMin + 2 || segW >= 4 * PX) segs.push([segX, segEnd]);
+      if (s < useGapCount) gapCentres.push(segEnd + gapW / 2);
+      segX = segEnd + (s < useGapCount ? gapW : 0);
+    }
+    return { segs, gapCentres };
+  })();
+  check('bay segmentation matches the legacy floor-drawing formula',
+    racks.rows[0].segments.length === legacy.segs.length &&
+    racks.rows[0].segments.every((s, i) =>
+      s.u0 === legacy.segs[i][0] && s.u1 === legacy.segs[i][1]) &&
+    racks.gapCentres.every((g, i) => g === legacy.gapCentres[i]));
+  check('drive-through gaps line up across every rack row',
+    JSON.stringify(racks.rackRows[0].segments) === JSON.stringify(racks.rackRows[1].segments));
+
+  const plan = buildForkliftPlan('wT', racks, PX, inside);
+  check('route plan exists for a 40 x 20 m warehouse', plan !== null && plan.durationMs > 0);
+  const liftLegs = plan.legs.filter((l) => l.kind === 'lift');
+  check('route is a whole number of pick + drop jobs',
+    liftLegs.length >= 2 && liftLegs.length % 2 === 0);
+
+  // Chain continuity, including the wrap back to the first leg.
+  let chained = true;
+  for (let i = 0; i < plan.legs.length; i++) {
+    const a = plan.legs[i], b = plan.legs[(i + 1) % plan.legs.length];
+    if (a.u1 !== b.u0 || a.v1 !== b.v0 || a.h1 !== b.h0) chained = false;
+  }
+  check('legs chain end to end and the loop closes without a jump', chained);
+
+  // Crossings: through a drive-through gap, or around the rack ends — never
+  // through a shelf.
+  const isCrossLegal = (u) => racks.gapCentres.some((gc) => Math.abs(gc - u) < 0.6) ||
+    racks.rackRows.every((r) => u <= r.bayLo - 4 || u >= r.bayHi + 4);
+  const crossLegs = plan.legs.filter((l) =>
+    l.kind === 'transit' && l.u0 === l.u1 && l.v0 !== l.v1);
+  check('every V-crossing uses a gap or drives around the rack ends',
+    crossLegs.length > 0 && crossLegs.every((l) => isCrossLegal(l.u0)));
+
+  // The truck's centre only enters a rack row's V band through a drive-through
+  // gap (or past the end of its bays) — never through shelving.
+  let violation = false, inBounds = true;
+  const STEPS = 4000, gapHalfPx = 1.1 * PX;
+  for (let i = 0; i < STEPS; i++) {
+    const p = forkliftPoseAt(plan, (i / STEPS) * plan.durationMs);
+    if (p.u < -160 || p.u > 160 || p.v < -80 || p.v > 80) inBounds = false;
+    for (const r of racks.rackRows) {
+      if (p.v >= r.rackVStart && p.v <= r.rackVEnd) {
+        const inGap = racks.gapCentres.some((gc) => Math.abs(p.u - gc) <= gapHalfPx);
+        const outsideBays = p.u <= r.bayLo || p.u >= r.bayHi;
+        if (!inGap && !outsideBays) violation = true;
+      }
+    }
+  }
+  check('truck only crosses a rack row through a drive-through gap', !violation);
+  check('truck never leaves the footprint bbox', inBounds);
+
+  check('brake frames light up for reverse legs and nothing else',
+    plan.legs.every((l) => l.braking === (l.kind === 'reverse')));
+  check('creep legs move at the slow approach speed',
+    plan.legs.filter((l) => l.kind === 'creep').every((l) =>
+      Math.abs((Math.abs(l.v1 - l.v0) / PX) / (l.dur / 1000) - FORKLIFT_CREEP_MPS) < 1e-9));
+
+  let picks = 0, drops = 0;
+  for (let i = 0; i < plan.legs.length; i++) {
+    if (plan.legs[i].kind !== 'lift') continue;
+    const after = plan.legs[i + 1];
+    if (after && after.carrying) picks++; else drops++;
+  }
+  check('each job picks the crate up and sets it back down', picks === drops && picks >= 1);
+
+  // The crate rides along between the pick's lift and the drop's reverse.
+  let carryState = false, carryOk = true;
+  for (const l of plan.legs) {
+    if (l.kind === 'lift') { carryState = true; continue; }
+    if (l.kind === 'reverse' && !l.carrying) { carryState = false; continue; }
+    if (l.carrying !== carryState) carryOk = false;
+  }
+  check('crate rides along between pick and drop (and only then)', carryOk);
+
+  const p0 = forkliftPoseAt(plan, 0);
+  const pEnd = forkliftPoseAt(plan, plan.durationMs);
+  check('pose wraps the loop seamlessly',
+    p0.u === pEnd.u && p0.v === pEnd.v && p0.heading === pEnd.heading);
+  check('same warehouse, same route (deterministic)',
+    JSON.stringify(buildForkliftPlan('wT', racks, PX, inside)) === JSON.stringify(plan));
+  check('another warehouse runs the same loop out of phase',
+    buildForkliftPlan('wT2', racks, PX, inside).phaseMs !== plan.phaseMs);
+
+  const tiny = warehouseRackLayout('wTiny', -16, 16, -16, 16, PX);
+  check('toy warehouse gets no truck', buildForkliftPlan('wTiny', tiny, PX, inside) === null);
+  check('a footprint that contains nothing gets no truck',
+    buildForkliftPlan('wT3', racks, PX, () => false) === null);
 }
 // (the makeGame tail + GEO fixture live above §15 — see the reorder note)
 

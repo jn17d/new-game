@@ -1015,6 +1015,7 @@
       try { map.removeFeatureState({ source: 'osm-buildings', id: co.id }, 'co'); } catch (_) {}
       applyOwnershipState(co.id, 'office');
       refreshInteriors();
+      refreshForklifts();
       companyCache.set(co.id, null);
       marketState.delete(co.id);
 
@@ -1098,6 +1099,7 @@
       try { map.removeFeatureState({ source: 'osm-buildings', id }, 'cls'); } catch (_) {}
       if (cls === 'factory') refreshBelts();
       refreshInteriors();
+      refreshForklifts();
       updateOwnedDisplay();
       updateWalletDisplay();
       updateProductDisplay();
@@ -1329,6 +1331,7 @@
       refreshMarket();
       refreshBelts();
       refreshInteriors();
+      refreshForklifts();
       resetBtn.classList.remove('confirm');
       resetBtn.textContent = 'Reset';
     });
@@ -1774,7 +1777,7 @@
       const iuMin = uMin + INSET_PX, iuMax = uMax - INSET_PX;
       const ivMin = vMin + INSET_PX, ivMax = vMax - INSET_PX;
 
-      const cont = new PIXI.Container();
+                                    const cont = new PIXI.Container();
 
       // ---- Footprint mask (built once; local space, so it never changes) ----
       const mask = new PIXI.Graphics();
@@ -1850,37 +1853,77 @@
         // 1. Concrete base
         g.rect(uMin, vMin, uRange, vRange).fill({ color: 0x7e8080 });
 
-        // 2. Rack aisles — strips running along V (perpendicular to the
-        //    longest wall), one strip per ~5 m of U. Even strips hold a
-        //    1.8 m rack bay plus walkway remainder; odd strips are pure
-        //    walkway (neighbouring walkways merge into wide aisles).
-        const aisleCount = Math.max(2, Math.floor(uRange / (5 * PX)));
-        const stripW = uRange / aisleCount;
-        for (let i = 0; i < aisleCount; i++) {
-          const uStart = uMin + i * stripW;
-          const rackW = Math.min(stripW, 1.8 * PX);
+        // 2. Rack aisles — strips running along U (the long axis, parallel to the
+        //    longest wall). V is divided into ~5 m strips: even strips hold a
+        //    1.8 m rack row (drawn rungs along U), odd strips are pure walkway.
+        //    Every row stops 1.5 m short of the end walls, and long rows get a
+        //    2.2 m cross-aisle gap every ~14 m so forklifts can drive straight
+        //    through the building — each gap connects the two walkway strips that
+        //    sandwich the row, exactly like a real warehouse drive-through aisle.
+        //    U is always along the longest wall (layoutFor), so rows follow the
+        //    building's longest dimension regardless of which way it faces.
+        //    Geometry comes from warehouseRackLayout() so the forklift router
+        //    drives the very same aisles that get drawn here.
+        const racks = warehouseRackLayout(id, uMin, uMax, vMin, vMax, PX);
+        const RACK_U_MIN = racks.rackUMin;
+        const RACK_U_MAX = racks.rackUMax;
+        const RACK_U_RANGE = racks.rackURange;
+        const ROW_DEPTH_PX = racks.rowDepthPx;
 
-          if (i % 2 === 0) {
-            // walkway remainder first, so the rack's shadow falls onto it
-            g.rect(uStart + rackW, vMin, stripW - rackW, vRange).fill({ color: 0x8a8c8c });
-            // rack bay structure
-            g.rect(uStart, vMin, rackW, vRange).fill({ color: 0x555555 });
-            // shelf lines across the bay every 0.8 m
-            for (let sv = vMin; sv <= vMax; sv += 0.8 * PX) {
-              g.moveTo(uStart, sv).lineTo(uStart + rackW, sv);
+        for (const row of racks.rows) {
+          if (row.isRack) {
+            const rackVStart = row.rackVStart;
+            const rackVEnd = row.rackVEnd;
+
+            // Walkway remainder below the rack first, so the rack's shadow
+            // falls onto floor, not the opposite rack. Full U width so the
+            // aisle reads wall to wall.
+            if (row.walkAfter > 0) g.rect(uMin, rackVEnd, uRange, row.walkAfter).fill({ color: 0x8a8c8c });
+
+            // Rack row body (full V strip, but only the U segment rendered)
+            g.rect(RACK_U_MIN, rackVStart, RACK_U_RANGE, ROW_DEPTH_PX).fill({ color: 0x555555 });
+
+            // Column uprights at the row's two V ends (2 px).
+            g.rect(RACK_U_MIN, rackVStart,         2, ROW_DEPTH_PX).fill({ color: 0x3a3a3a });
+            g.rect(RACK_U_MIN, rackVEnd - 2,       2, 2).fill({ color: 0x3a3a3a });
+            g.rect(RACK_U_MAX - 2, rackVStart,     2, ROW_DEPTH_PX).fill({ color: 0x3a3a3a });
+            g.rect(RACK_U_MAX - 2, rackVEnd - 2,   2, 2).fill({ color: 0x3a3a3a });
+
+            if (RACK_U_RANGE > 0) {
+              // Clip shelf cadence if a row is enormous: keep total line count
+              // bounded (~1600 across the whole building) so huge footprints
+              // never stall the main thread.
+              const shelfStep = 0.8 * PX;
+              const totalShelfLinesEstimate = racks.gapCentres.length
+                + 1 * Math.ceil(RACK_U_RANGE / shelfStep) * racks.rowCount;
+              const shelfStepAdj = (totalShelfLinesEstimate > 1600)
+                ? 0.8 * PX * Math.ceil(totalShelfLinesEstimate / 1600)
+                : shelfStep;
+
+              for (const seg of row.segments) {
+                const segX = seg.u0, segEnd = seg.u1;
+                // Draw this segment's shelves (horizontal rungs across U).
+                for (let rp = rackVStart; rp <= rackVEnd; rp += shelfStepAdj) {
+                  g.moveTo(segX, rp).lineTo(segEnd, rp);
+                }
+                // Segment end uprights (2 px), so each bay reads as a separate rack.
+                g.rect(segX,       rackVStart, 2, ROW_DEPTH_PX).fill({ color: 0x3a3a3a });
+                g.rect(segEnd - 2, rackVStart, 2, ROW_DEPTH_PX).fill({ color: 0x3a3a3a });
+                // 2 px aisle shadow to the segment's lower-right edge.
+                g.rect(segX,       rackVEnd,   2, 2).fill({ color: 0x6a6c6c });
+              }
+              // Cast the stroke for all shelf rungs queued above.
+              g.stroke({ color: 0x3a3a3a, width: 1 });
             }
-            g.stroke({ color: 0x3a3a3a, width: 1 });
-            // end uprights at the bay's left + right edges
-            g.rect(uStart, vMin, 2, vRange).fill({ color: 0x3a3a3a });
-            g.rect(uStart + rackW - 2, vMin, 2, vRange).fill({ color: 0x3a3a3a });
-            // 2px aisle shadow to the rack's right (light is top-left)
-            g.rect(uStart + rackW, vMin, 2, vRange).fill({ color: 0x6a6c6c });
+
+            // Aisle shadow along the row's lower edge (2 px, light = top-left).
+            g.rect(RACK_U_MIN, rackVEnd, RACK_U_RANGE, 2).fill({ color: 0x6a6c6c });
           } else {
-            // walkway strip + dashed centre safety line (1.5 m dash, 0.5 m gap)
-            g.rect(uStart, vMin, stripW, vRange).fill({ color: 0x8a8c8c });
-            const lineU = uStart + stripW / 2;
-            for (let sv = vMin; sv < vMax; sv += 2 * PX) {
-              g.rect(lineU, sv, 1, Math.min(1.5 * PX, vMax - sv)).fill({ color: 0xc8a000 });
+            // Walkway strip — full U (wall-to-wall) plus the dashed centre line.
+            g.rect(uMin, row.vStart, uRange, row.vEnd - row.vStart).fill({ color: 0x8a8c8c });
+            const lineV = (row.vStart + row.vEnd) / 2;
+            for (let su = uMin; su < uMax; su += 2 * PX) {
+              g.rect(su, lineV - 0.5, Math.min(1.5 * PX, uMax - su), 1).fill({ color: 0xc8a000 });
             }
           }
         }
@@ -1954,9 +1997,20 @@
         g.rect(mRoomU, mRoomV, mRoomW, mRoomH).stroke({ color: 0xd4c8e8, width: 2 });
         const tW = Math.min(3 * PX, mRoomW - PX * 0.6), tH = 1.5 * PX;
         if (tW > 0 && mRoomH > tH + PX * 0.5) {
-          g.rect(mRoomU + (mRoomW - tW) / 2, vMid - tH / 2, tW, tH).fill({ color: 0xc8bc98 });
+                                        g.rect(mRoomU + (mRoomW - tW) / 2, vMid - tH / 2, tW, tH).fill({ color: 0xc8bc98 });
         }
       }
+
+      // ---- Wall border (#282828) — follow the actual footprint perimeter.
+      //      Draw the real local footprint ring instead of the bounding box so
+      //      L-shapes, notches and other irregular buildings keep continuous
+      //      walls all the way around their true edges. The footprint mask clips
+      //      the outside half of the stroke, leaving a thin wall just inside. ----
+      const wallG = new PIXI.Graphics();
+      const wallW = 6;                // thin wall line, in local/render pixels
+      wallG.poly(localRing.flat())
+           .stroke({ color: 0x282828, width: wallW });
+      cont.addChild(wallG);
 
       return cont;
     };
@@ -2061,6 +2115,86 @@
       layoutCache.set(id, layout);
       return layout;
     };
+
+    // ---- Warehouse rack geometry (shared by the floor and the forklifts) ----
+    // Rows are ~5 m stripes across V, alternating rack row / walkway:
+    //   rack row — a 1.8 m rack bay pinned to the stripe's low-V edge, with the
+    //              walkway as the stripe's remainder below it (row.laneV)
+    //   walkway  — full stripe width, wall to wall
+    // Every rack row is cut into bays by 2.2 m drive-through gaps every ~14 m of
+    // usable U. That segmentation is identical for every row, so the gaps of
+    // different rows line up — which IS the aisle network a truck uses to cross
+    // between racks (see buildForkliftPlan). Pure + memoized per building id;
+    // buildInterior draws from the very same numbers, so the forklifts always
+    // drive the aisles that are actually drawn.
+    const racksCache = new Map();
+    const warehouseRackLayout = (id, uMin, uMax, vMin, vMax, PX) => {
+      if (racksCache.has(id)) return racksCache.get(id);
+      const rackUMin = uMin + 1.5 * PX;          // clear floor at both end walls
+      const rackUMax = uMax - 1.5 * PX;
+      const rackURange = Math.max(0, rackUMax - rackUMin);
+      const rowDepthPx = 1.8 * PX;               // rack bay depth along V
+      const vRange = vMax - vMin;
+
+      const rowCount = Math.max(2, Math.floor(vRange / (5 * PX)));
+      const stripW = vRange / rowCount;
+
+      // Bay segmentation — the same maths the bay loop in buildInterior uses
+      // (gap width 2.2 m, ~14 m pitch, at most 8 gaps, 4 m minimum bay).
+      const gapW = 2.2 * PX;
+      const gapCount = Math.max(0, Math.floor(rackURange / (14 * PX)));
+      const useGapCount = Math.min(gapCount, 8);              // safety cap
+      const segW = Math.max(4 * PX, (rackURange - useGapCount * gapW) / (useGapCount + 1));
+      const segments = [], gaps = [];
+      let segX = rackUMin;
+      for (let s = 0; s <= useGapCount; s++) {
+        const segEnd = segX + segW;
+        if (segEnd >= rackUMin + 2 || segW >= 4 * PX) {
+          segments.push({ u0: segX, u1: segEnd, uC: (segX + segEnd) / 2 });
+        }
+        segX = segEnd;
+        if (s < useGapCount) {
+          gaps.push({ u0: segX, u1: segX + gapW, uC: segX + gapW / 2 });
+          segX += gapW;
+        }
+      }
+
+      const rows = [];
+      for (let i = 0; i < rowCount; i++) {
+        const vStart = vMin + i * stripW;
+        const vEnd = vStart + stripW;
+        if (i % 2 !== 0) {
+          // Pure walkway stripe, wall to wall.
+          rows.push({ i, isRack: false, vStart, vEnd, laneV: (vStart + vEnd) / 2, usable: true });
+          continue;
+        }
+        const rackVStart = vStart;
+        const rackVEnd = vStart + rowDepthPx;
+        const walkAfter = Math.max(0, vEnd - rackVEnd);
+        // Lane centre sits in the stripe's remainder (the rack's walkway side),
+        // clamped so the truck clears both the rack face and the next stripe.
+        const laneV = rackVEnd + Math.max(0.9 * PX, Math.min(walkAfter * 0.7, 2.4 * PX));
+        const first = segments.length ? segments[0] : { u0: rackUMin, u1: rackUMin };
+        const last = segments.length ? segments[segments.length - 1] : first;
+        rows.push({
+          i, isRack: true, vStart, vEnd, rackVStart, rackVEnd, walkAfter, laneV,
+          segments, bayLo: first.u0, bayHi: last.u1,
+          // A bay can only be worked by a truck if the walkway beside it has
+          // room for a truck to sit in — 1.5 m of rack clearance, minimum.
+          usable: walkAfter >= 1.5 * PX
+        });
+      }
+
+      const layout = {
+        rows, rowCount, stripW, rowDepthPx,
+        rackRows: rows.filter((r) => r.isRack && r.usable),
+        gapCentres: gaps.map((g) => g.uC),
+        rackUMin, rackUMax, rackURange
+      };
+      racksCache.set(id, layout);
+      return layout;
+    };
+
 
     // ---- Interior floor rendering (factory / warehouse / office) ----
     // Sits below beltRoot in the PixiJS scene, fades in at INTERIOR_MIN_ZOOM.
@@ -2213,6 +2347,7 @@
     const refreshInteriors = () => {
       for (const c of interiorContainers.values()) c.destroy({ children: true });
       interiorContainers.clear();
+      racksCache.clear();
     };
 
     // ---- Animated 📦 deliveries (factory→warehouse, storage→buyer) ----
@@ -2317,6 +2452,381 @@
       }
     };
 
+    // ---- Warehouse forklifts ------------------------------------------------
+    // A pixel-art forklift works the aisles of every owned warehouse: it
+    // trundles along an aisle, turns to face a bay, creeps in slowly, picks up
+    // a crate, backs out (rear lights lit — the art's own brake frames), hauls
+    // it to another bay and sets it down. All geometry comes from
+    // warehouseRackLayout(), so the truck drives the aisles that are drawn and
+    // every crossing goes through a real drive-through gap.
+    //
+    // Two pure functions do the thinking — buildForkliftPlan() once per
+    // building, forkliftPoseAt() per frame as a pure function of the clock
+    // (same trick as boxPointAt()) — so the motion is unit-testable headlessly
+    // and can never drift out of sync with map pans.
+    const FORKLIFT_ART_SCALE = 0.7;      // 32 px art -> 22.4 local px = 2.8 m box
+    const FORKLIFT_LEN_M = (31 * FORKLIFT_ART_SCALE) / (32 / MODULE_M); // art content is 31 px tall
+    const FORKLIFT_FORK_INSIDE_M = 0.2;  // forks stop this far past the bay face
+    const FORKLIFT_DRIVE_MPS = 1.4;      // hauling speed along an aisle
+    const FORKLIFT_CREEP_MPS = 0.45;     // slow approach into the bay
+    const FORKLIFT_REVERSE_MPS = 0.8;    // backing out of the bay
+    const FORKLIFT_TURN_MS = 350;        // turning on the spot
+    const FORKLIFT_LIFT_MS = 700;        // forks in the rack
+    const FORKLIFT_TARGET_M = 14;        // preferred haul distance between bays
+    const FORKLIFT_MAX_JOBS = 6;         // route length per warehouse
+    const FORKLIFT_PICK_TRIES = 12;      // candidate bays evaluated per drop
+    const FORKLIFT_LANE_MARGIN_M = 0.5;  // clearance kept outside a rack bay band
+    const FORKLIFT_GAP_SNAP_M = 1.0;     // a crossing U must sit inside a gap
+    const FORKLIFT_END_CROSS_M = 0.75;   // U past a rack run used to drive around it
+    const FORKLIFT_CRATE_COLOR = 0x8b6344;   // matches the factory floor boxes
+    const FORKLIFT_CRATE_SCALE = 0.3;    // crate art (32 px) on the forks
+    const FORKLIFT_JIGGLE_MS = 130;      // art's own 2-frame body jiggle
+
+    let forkliftRoot = null;                    // warehouse trucks, above the floor
+    const forkliftContainers = new Map();       // building id -> PIXI.Container
+    let forkliftFrames = { drive: [], brake: [] };  // set once the sheet loads
+
+    // Pure: the truck's pose at absolute time t (ms). Wraps around the plan, so
+    // the loop is seamless and frame-rate independent — the same trick the
+    // belts use for their flipbook.
+    const forkliftPoseAt = (plan, tMs) => {
+      const T = plan.durationMs;
+      let t = (tMs + plan.phaseMs) % T;
+      if (t < 0) t += T;
+      const last = plan.legs[plan.legs.length - 1];
+      for (const lg of plan.legs) {
+        if (t < lg.dur || lg === last) {
+          const p = lg.dur > 0 ? Math.min(1, t / lg.dur) : 1;
+          let dh = lg.h1 - lg.h0;                 // shortest-arc turn
+          while (dh > Math.PI) dh -= 2 * Math.PI;
+          while (dh < -Math.PI) dh += 2 * Math.PI;
+          return {
+            u: lg.u0 + (lg.u1 - lg.u0) * p,
+            v: lg.v0 + (lg.v1 - lg.v0) * p,
+            heading: lg.h0 + dh * p,
+            carrying: lg.carrying,
+            braking: lg.braking,
+            kind: lg.kind,
+            moving: lg.u0 !== lg.u1 || lg.v0 !== lg.v1
+          };
+        }
+        t -= lg.dur;
+      }
+      return null;
+    };
+
+    // Deterministic route: a chain of pick -> drop jobs built once per building.
+    // A job is a flat list of legs ({u0,v0,u1,v1,h0,h1,dur,carrying,braking,kind}):
+    //   'transit' — hauls along the aisles (a row change crosses through a gap)
+    //   'face'    — turns on the spot      'creep'   — inches into the bay
+    //   'lift'    — pauses, forks in the rack (pick up / set down)
+    //   'reverse' — backs out, brake frames lit
+    // Legs validate against inFootprint(u, v), so L-shaped footprints and
+    // notches can never send the truck through a wall. Returns null when the
+    // warehouse is too small to be worth a truck.
+    const buildForkliftPlan = (id, racks, PX, inFootprint) => {
+      const bays = [];
+      for (const row of racks.rackRows) {
+        if (!row.usable) continue;
+        for (const seg of row.segments) bays.push({ row, seg });
+      }
+      if (!bays.length || racks.rackURange < 4 * PX) return null;
+
+      const rand = seededRand(hash32(id + ':forklift'));
+
+      // Footprint check along a V-crossing: endpoints + midpoint of the span.
+      const vClear = (u, vA, vB) => {
+        const lo = Math.min(vA, vB), hi = Math.max(vA, vB);
+        return inFootprint(u, lo) && inFootprint(u, (lo + hi) / 2) && inFootprint(u, hi);
+      };
+
+      // Legal U for a V-crossing through `row`: inside one of its gaps, or clear
+      // of the row's bay band altogether. Gaps repeat identically on every rack
+      // row, so a U legal for one row is legal for all of them — the crossing
+      // network falls out of the segmentation for free.
+      const crossUFor = (row, hintU, fromV) => {
+        const cands = racks.gapCentres.concat([
+          racks.rackUMin - FORKLIFT_END_CROSS_M * PX,
+          racks.rackUMax + FORKLIFT_END_CROSS_M * PX
+        ]);
+        let best = null, bestD = Infinity;
+        for (const u of cands) {
+          const legal = racks.gapCentres.some((gc) => Math.abs(gc - u) <= FORKLIFT_GAP_SNAP_M * PX)
+            || u <= row.bayLo - FORKLIFT_LANE_MARGIN_M * PX
+            || u >= row.bayHi + FORKLIFT_LANE_MARGIN_M * PX;
+          if (!legal) continue;
+          if (!vClear(u, fromV, row.laneV) || !inFootprint(u, row.laneV)) continue;
+          const d = Math.abs(u - hintU);
+          if (d < bestD) { bestD = d; best = u; }
+        }
+        return best;
+      };
+
+      const legs = [];
+      let curH = 0;
+      const push = (u0, v0, u1, v1, o) => {
+        const dist = Math.hypot(u1 - u0, v1 - v0) / PX;         // metres
+        const target = o && o.heading !== undefined
+          ? o.heading
+          : (dist > 1e-6 ? Math.atan2(v1 - v0, u1 - u0) : curH);
+        const speed = o && o.speed !== undefined ? o.speed : 0;
+        legs.push({
+          u0, v0, u1, v1, h0: curH, h1: target,
+          dur: dist > 1e-6 ? (dist / speed) * 1000 : (o && o.pauseMs) || FORKLIFT_TURN_MS,
+          carrying: !!(o && o.carrying), braking: !!(o && o.braking),
+          kind: (o && o.kind) || (dist > 1e-6 ? 'transit' : 'face')
+        });
+        curH = target;
+      };
+
+      // Drive from one aisle lane to another: straight across when both bays
+      // share a row, otherwise through the nearest legal crossing U.
+      const transit = (fromRow, fromU, toRow, toU, o) => {
+        if (fromRow === toRow) {
+          push(fromU, fromRow.laneV, toU, toRow.laneV, o);
+          return true;
+        }
+        const x = crossUFor(toRow, toU, fromRow.laneV);
+        if (x === null) return false;
+        push(fromU, fromRow.laneV, x, fromRow.laneV, o);
+        push(x, fromRow.laneV, x, toRow.laneV, o);
+        push(x, toRow.laneV, toU, toRow.laneV, o);
+        return true;
+      };
+
+      // Work a bay: face it, creep in, lift or set down, back out. The crate
+      // appears with the forks in the rack (pick) and vanishes as the truck
+      // backs away (drop).
+      const workBay = (bayU, row, carrying, carryingAfter) => {
+        const stopV = row.rackVEnd + (FORKLIFT_LEN_M / 2 - FORKLIFT_FORK_INSIDE_M) * PX;
+        if (!inFootprint(bayU, stopV)) return false;
+        push(bayU, row.laneV, bayU, row.laneV,
+          { heading: -Math.PI / 2, carrying, kind: 'face' });
+        push(bayU, row.laneV, bayU, stopV,
+          { speed: FORKLIFT_CREEP_MPS, heading: -Math.PI / 2, carrying, kind: 'creep' });
+        push(bayU, stopV, bayU, stopV,
+          { heading: -Math.PI / 2, pauseMs: FORKLIFT_LIFT_MS,
+            carrying: !!(carrying || carryingAfter), kind: 'lift' });
+        push(bayU, stopV, bayU, row.laneV,
+          { speed: FORKLIFT_REVERSE_MPS, heading: -Math.PI / 2,
+            carrying: carryingAfter, braking: true, kind: 'reverse' });
+        return true;
+      };
+
+      let from = null;                       // where the truck is parked
+      let first = null;
+      for (let j = 0; j < FORKLIFT_MAX_JOBS; j++) {
+        const pick = from || bays[(rand() * bays.length) | 0];
+        if (!first) first = pick;
+
+        // Best drop: a different bay, a haul close to FORKLIFT_TARGET_M. Half
+        // the jobs force a row change (hauled through a drive-through gap), the
+        // rest shuttle within the row — the mix is what makes it read as work.
+        const wantRowChange = rand() < 0.5;
+        let drop = null, bestScore = -Infinity;
+        for (let pass = 0; pass < 2 && !drop; pass++) {
+          for (let k = 0; k < FORKLIFT_PICK_TRIES; k++) {
+            const cand = bays[(rand() * bays.length) | 0];
+            if (cand.row === pick.row && cand.seg === pick.seg) continue;
+            if (pass === 0 && wantRowChange === (cand.row === pick.row)) continue;
+            const far = Math.hypot(cand.seg.uC - pick.seg.uC,
+              cand.row.laneV - pick.row.laneV) / PX;
+            if (far < 2) continue;
+            const score = -Math.abs(far - FORKLIFT_TARGET_M);
+            if (score > bestScore) { bestScore = score; drop = cand; }
+          }
+          if (!wantRowChange) break;       // same-row shuttles need no fallback
+        }
+        if (!drop) break;
+
+        const mark = legs.length;                       // rollback point
+        const startRow = from ? from.row : pick.row;
+        const startU = from ? from.seg.uC : pick.seg.uC;
+        if (!transit(startRow, startU, pick.row, pick.seg.uC,
+            { speed: FORKLIFT_DRIVE_MPS, carrying: false })) { legs.length = mark; break; }
+        if (!workBay(pick.seg.uC, pick.row, false, true)) { legs.length = mark; break; }
+        if (!transit(pick.row, pick.seg.uC, drop.row, drop.seg.uC,
+            { speed: FORKLIFT_DRIVE_MPS, carrying: true })) { legs.length = mark; break; }
+        if (!workBay(drop.seg.uC, drop.row, true, false)) { legs.length = mark; break; }
+        from = drop;
+      }
+      if (!from || !first) return null;
+
+      // Close the cycle: haul back to the route's starting bay so the loop
+      // wraps around without a jump.
+      const closeMark = legs.length;
+      if (!transit(from.row, from.seg.uC, first.row, first.seg.uC,
+          { speed: FORKLIFT_DRIVE_MPS, carrying: false })) legs.length = closeMark;
+      if (!legs.length) return null;
+
+      // The first leg's entry heading comes from the last leg's exit, so the
+      // wrap-around is seamless in heading too.
+      legs[0].h0 = legs[legs.length - 1].h1;
+
+      // Every leg endpoint and midpoint must stay inside the footprint.
+      for (const lg of legs) {
+        if (!inFootprint(lg.u0, lg.v0) || !inFootprint(lg.u1, lg.v1)
+          || !inFootprint((lg.u0 + lg.u1) / 2, (lg.v0 + lg.v1) / 2)) return null;
+      }
+
+      let durationMs = 0;
+      for (const lg of legs) durationMs += lg.dur;
+      return {
+        legs, durationMs,
+        // Per-building phase offset so warehouses never move in lockstep.
+        phaseMs: hash32(id + ':forklift-phase') % Math.max(1, Math.floor(durationMs))
+      };
+    };
+
+    // One warehouse -> one container holding its truck (crate + sprite), placed
+    // in the same local frame the interior floor is drawn in. The footprint
+    // mask keeps the truck inside the walls even mid-turn.
+    const buildForklift = (id, geometry) => {
+      const layout = layoutFor(id, geometry);
+      const { cx, cy, angle } = layout;
+      const mLon = M_PER_DEG_LAT * Math.cos(cy * Math.PI / 180);
+      const cosA = Math.cos(angle), sinA = Math.sin(angle);
+      const PX = 32 / MODULE_M;
+
+      const toLocal = ([lon, lat]) => {
+        const ex = (lon - cx) * mLon;
+        const ny = -(lat - cy) * M_PER_DEG_LAT;
+        return [(ex * cosA + ny * sinA) * PX, (-ex * sinA + ny * cosA) * PX];
+      };
+      const ring = geometry.type === 'Polygon'
+        ? geometry.coordinates[0]
+        : geometry.coordinates[0][0];
+      const localRing = ring.map(toLocal);
+      let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+      for (const [u, v] of localRing) {
+        if (u < uMin) uMin = u; if (u > uMax) uMax = u;
+        if (v < vMin) vMin = v; if (v > vMax) vMax = v;
+      }
+
+      // Local px -> [lng, lat] (the inverse of toLocal/layoutFor), for the
+      // point-in-footprint tests the route builder runs.
+      const toWorld = (u, v) => {
+        const e = u / PX, n = v / PX;
+        return [cx + (e * cosA - n * sinA) / mLon, cy - (e * sinA + n * cosA) / M_PER_DEG_LAT];
+      };
+      const inFootprint = (u, v) => {
+        try { return turf.booleanPointInPolygon(toWorld(u, v), geometry); } catch (_) { return false; }
+      };
+
+      const racks = warehouseRackLayout(id, uMin, uMax, vMin, vMax, PX);
+      const plan = buildForkliftPlan(id, racks, PX, inFootprint);
+      if (!plan) return null;
+
+      const cont = new PIXI.Container();
+      const mask = new PIXI.Graphics();
+      mask.poly(localRing.flat()).fill({ color: 0xffffff });
+      cont.addChild(mask);
+      cont.mask = mask;
+
+      const truck = new PIXI.Container();
+      let crate;
+      if (boxTexture) {
+        crate = new PIXI.Sprite(boxTexture);
+        crate.anchor.set(0.5);
+        crate.scale.set(FORKLIFT_CRATE_SCALE);
+      } else {
+        crate = new PIXI.Graphics();
+        crate.rect(-4, -4, 8, 8).fill({ color: FORKLIFT_CRATE_COLOR });
+        crate.rect(-4, -4, 8, 8).stroke({ color: 0x3a2a14, width: 1 });
+      }
+      crate.position.set(0, -8.5);              // resting on the forks (art faces -V)
+      crate.visible = false;
+      const sprite = new PIXI.Sprite(forkliftFrames.drive[0] || PIXI.Texture.EMPTY);
+      sprite.anchor.set(0.5);
+      sprite.scale.set(FORKLIFT_ART_SCALE);
+      truck.addChild(crate);                    // crate sits behind the mast art
+      truck.addChild(sprite);
+      cont.addChild(truck);
+
+      cont.__plan = plan;
+      cont.__truck = truck;
+      truck.__sprite = sprite;
+      truck.__crate = crate;
+      return cont;
+    };
+
+    // Per-frame pass — same cheap pattern as renderInteriors(): plans and
+    // containers are built once per building (cached), every tick only
+    // evaluates the pure pose + reprojects position/rotation/scale.
+    const renderForklifts = () => {
+      if (!pixiApp || !forkliftRoot) return;
+      const zoom = map.getZoom();
+      const alpha = smoothstep(INTERIOR_MIN_ZOOM - 0.5, INTERIOR_MIN_ZOOM + 0.5, zoom);
+      forkliftRoot.alpha = alpha;
+      if (alpha === 0 || !forkliftFrames.drive.length) { forkliftRoot.visible = false; return; }
+      forkliftRoot.visible = true;
+
+      const now = performance.now();
+      const mpp = 78271.5 * Math.cos(CHATTERIS[1] * Math.PI / 180) / Math.pow(2, zoom);
+      const scale = (MODULE_M / mpp) / 32;
+      const w = pixiApp.screen.width, h = pixiApp.screen.height;
+      const frameIdx = Math.floor(now / FORKLIFT_JIGGLE_MS) % 2;   // art's 2-frame jiggle
+
+      for (const [id, rec] of owned) {
+        if (rec.cls !== 'warehouse') continue;   // forklifts are warehouse-class only
+        const geom = geometryFor(id);
+        if (!geom) continue;
+
+        // Bbox cull — same pattern as the interiors and belts
+        const [minX, minY, maxX, maxY] = bboxOfGeometry(id, geom);
+        const tl = map.project([minX, maxY]);
+        const br = map.project([maxX, minY]);
+        if (br.x < 0 || tl.x > w || br.y < 0 || tl.y > h) {
+          const existing = forkliftContainers.get(id);
+          if (existing) existing.visible = false;
+          continue;
+        }
+
+        let cont = forkliftContainers.get(id);
+        if (!cont) {
+          cont = buildForklift(id, geom);
+          if (!cont) continue;                   // too small to be worth a truck
+          forkliftRoot.addChild(cont);
+          forkliftContainers.set(id, cont);
+        }
+
+        const layout = layoutFor(id, geom);
+        const anchor = map.project([layout.cx, layout.cy]);
+        cont.position.set(anchor.x, anchor.y);
+        cont.rotation = layout.angle;
+        cont.scale.set(scale);
+        cont.visible = true;
+
+        const pose = forkliftPoseAt(cont.__plan, now);
+        if (!pose) continue;
+        const truck = cont.__truck;
+        truck.position.set(pose.u, pose.v);
+        // The art faces -V (up-screen) at rotation 0, so a heading of -90 deg
+        // — i.e. facing -V — maps to rotation 0: heading + PI/2.
+        truck.rotation = pose.heading + Math.PI / 2;
+        const frames = pose.braking ? forkliftFrames.brake : forkliftFrames.drive;
+        if (frames.length) truck.__sprite.texture = frames[frameIdx % frames.length];
+        truck.__crate.visible = pose.carrying;
+      }
+
+      // Drop trucks for buildings that are no longer owned warehouses
+      for (const id of [...forkliftContainers.keys()]) {
+        const r = owned.get(id);
+        if (!r || r.cls !== 'warehouse') {
+          forkliftContainers.get(id).destroy({ children: true });
+          forkliftContainers.delete(id);
+        }
+      }
+    };
+
+    // Hook for ownership changes (buy / sell / reset) — drops the cached
+    // trucks and their routes so the next frame rebuilds them. Mirrors
+    // refreshInteriors().
+    const refreshForklifts = () => {
+      for (const c of forkliftContainers.values()) c.destroy({ children: true });
+      forkliftContainers.clear();
+    };
+
     (async () => {
       try {
         pixiApp = new PIXI.Application();
@@ -2341,7 +2851,9 @@
         }
 
         interiorRoot = new PIXI.Container();
-        pixiApp.stage.addChild(interiorRoot);   // interiors render below belts
+        pixiApp.stage.addChild(interiorRoot);   // interiors render below forklifts
+        forkliftRoot = new PIXI.Container();
+        pixiApp.stage.addChild(forkliftRoot);   // trucks drive on the floors
         beltRoot = new PIXI.Container();
         pixiApp.stage.addChild(beltRoot);
         boxRoot = new PIXI.Container();
@@ -2356,7 +2868,27 @@
           boxTexture = tex;
         }
 
+        // Forklift sheet for warehouse interiors — same loader pattern as the
+        // belts: explicit frame rects over one embedded PNG, nearest-neighbour.
+        const fAsset = window.MACHINE_ASSETS && window.MACHINE_ASSETS.forklift;
+        if (fAsset && fAsset.image) {
+          const fBase = await PIXI.Assets.load(fAsset.image);
+          fBase.source.scaleMode = 'nearest';                 // crisp pixel art
+          const ftex = (i) => new PIXI.Texture({
+            source: fBase.source,
+            frame: new PIXI.Rectangle(fAsset.frames[i].x, fAsset.frames[i].y,
+              fAsset.frameWidth, fAsset.frameHeight)
+          });
+          forkliftFrames = {
+            drive: (fAsset.drive || []).map(ftex),
+            brake: (fAsset.brake || []).map(ftex)
+          };
+        } else {
+          console.warn('machines-data.js missing forklift sprite — warehouse forklifts disabled');
+        }
+
         pixiApp.ticker.add(() => renderInteriors());
+        pixiApp.ticker.add(() => renderForklifts());
         pixiApp.ticker.add(() => renderBelts());
         pixiApp.ticker.add(() => renderBoxes());
       } catch (err) {
