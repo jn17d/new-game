@@ -430,11 +430,21 @@
             '#d6cfc7'                // unowned
           ]
         ],
+        // Owned buildings (feature-state `cls` set) fade out from z16 so the
+        // PixiJS pixel-art interior can take over the footprint; unowned and
+        // NPC-company buildings keep the original ramp exactly (0.825 at z16
+        // on the old curve, 0.9 from z17). Note: this can't be done with a
+        // second fill layer — MapLibre filters don't support feature-state —
+        // and only one zoom interpolate/step is allowed per expression, so
+        // the fade is one zoom interpolation whose stop VALUES are the
+        // data-driven `case` expressions below.
         'fill-opacity': [
           'interpolate', ['linear'], ['zoom'],
-          13, 0.35,
-          15, 0.75,
-          17, 0.9
+          13, ['case', ['!=', ['coalesce', ['feature-state', 'cls'], ''], ''], 0.35, 0.35],
+          15, ['case', ['!=', ['coalesce', ['feature-state', 'cls'], ''], ''], 0.75, 0.75],
+          16, ['case', ['!=', ['coalesce', ['feature-state', 'cls'], ''], ''], 0.70, 0.825],
+          17, ['case', ['!=', ['coalesce', ['feature-state', 'cls'], ''], ''], 0.20, 0.90],
+          18, ['case', ['!=', ['coalesce', ['feature-state', 'cls'], ''], ''], 0.00, 0.90]
         ],
         'fill-outline-color': [
           'case', ['==', ['feature-state', 'co'], 1], '#1f6e63',
@@ -1004,6 +1014,7 @@
       updateOwnedDisplay();
       try { map.removeFeatureState({ source: 'osm-buildings', id: co.id }, 'co'); } catch (_) {}
       applyOwnershipState(co.id, 'office');
+      refreshInteriors();
       companyCache.set(co.id, null);
       marketState.delete(co.id);
 
@@ -1086,6 +1097,7 @@
       saveWallet();
       try { map.removeFeatureState({ source: 'osm-buildings', id }, 'cls'); } catch (_) {}
       if (cls === 'factory') refreshBelts();
+      refreshInteriors();
       updateOwnedDisplay();
       updateWalletDisplay();
       updateProductDisplay();
@@ -1316,6 +1328,7 @@
       appliedCoStates.clear();
       refreshMarket();
       refreshBelts();
+      refreshInteriors();
       resetBtn.classList.remove('confirm');
       resetBtn.textContent = 'Reset';
     });
@@ -1699,6 +1712,255 @@
     map.on('click', closeBuildingMenu);
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeBuildingMenu(); });
 
+    // ---- Interior rendering utilities ----
+    // Owned buildings fade into procedurally-generated pixel-art floors from
+    // INTERIOR_MIN_ZOOM (see buildInterior + renderInteriors below, plus the
+    // owned-buildings fill-opacity fade on the 'osm-buildings-fill' layer).
+    const smoothstep = (edge0, edge1, x) => {
+      const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+      return t * t * (3 - 2 * t);
+    };
+
+    // LCG seeded from a building id hash — deterministic, not cryptographic
+    const seededRand = (seed) => {
+      let s = seed >>> 0;
+      return () => {
+        s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+        return s / 0xFFFFFFFF;
+      };
+    };
+
+    const INTERIOR_MIN_ZOOM = 16;   // interior appears (fades in 15.5 → 16.5)
+    const INTERIOR_FULL_ZOOM = 17;  // reference point — fully opaque well before belts (18)
+
+    // Build (once per building) a PIXI.Container holding the pixel-art
+    // interior, drawn in the same local frame layoutFor() uses for belt
+    // slots: metres scaled to local px (1 local px = MODULE_M/32 m), origin
+    // at the bbox centre, U along the longest wall, +V down-screen. Only the
+    // container's position / rotation / scale change afterwards (see
+    // renderInteriors); everything is clipped to the footprint by a
+    // local-space Graphics mask that transforms with the container.
+    const buildInterior = (id, cls, geometry) => {
+      const layout = layoutFor(id, geometry);
+      const { cx, cy, angle } = layout;
+      const mLon = M_PER_DEG_LAT * Math.cos(cy * Math.PI / 180);
+      const cosA = Math.cos(angle), sinA = Math.sin(angle);
+      const PX = 32 / MODULE_M;   // local px per metre in this frame
+
+      // [lng, lat] ring vertex -> local [u, v] px (same rotation as layoutFor)
+      const toLocal = ([lon, lat]) => {
+        const ex = (lon - cx) * mLon;
+        const ny = -(lat - cy) * M_PER_DEG_LAT;
+        return [(ex * cosA + ny * sinA) * PX, (-ex * sinA + ny * cosA) * PX];
+      };
+
+      // Footprint ring in local px (for the mask + extent maths)
+      const ring = geometry.type === 'Polygon'
+        ? geometry.coordinates[0]
+        : geometry.coordinates[0][0];
+      const localRing = ring.map(toLocal);
+
+      // Extent in local px
+      let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+      for (const [u, v] of localRing) {
+        if (u < uMin) uMin = u; if (u > uMax) uMax = u;
+        if (v < vMin) vMin = v; if (v > vMax) vMax = v;
+      }
+      const uRange = uMax - uMin, vRange = vMax - vMin;
+      const vMid = (vMin + vMax) / 2;
+
+      // 2 m wall clearance — usable floor area inset of the footprint bbox
+      const INSET_PX = 2 * PX;
+      const iuMin = uMin + INSET_PX, iuMax = uMax - INSET_PX;
+      const ivMin = vMin + INSET_PX, ivMax = vMax - INSET_PX;
+
+      const cont = new PIXI.Container();
+
+      // ---- Footprint mask (built once; local space, so it never changes) ----
+      const mask = new PIXI.Graphics();
+      mask.poly(localRing.flat()).fill({ color: 0xffffff });
+      cont.addChild(mask);
+      cont.mask = mask;
+
+      // ---- Floor graphics ----
+      const g = new PIXI.Graphics();
+      cont.addChild(g);
+
+      // Same building id -> same interior, forever
+      const rand = seededRand(hash32(id + ':floor'));
+
+      if (cls === 'factory') {
+        // 1. Concrete base
+        g.rect(uMin, vMin, uRange, vRange).fill({ color: 0x8c8880 });
+
+        // 2. Floor seams — lines across U every 2 m
+        const gridStep = 2 * PX;
+        for (let v = vMin; v <= vMax; v += gridStep) g.moveTo(uMin, v).lineTo(uMax, v);
+        g.stroke({ color: 0x7a7770, width: 1 });
+
+        // 3. Loading zone — middle 40% of the V extent, full U
+        const zoneVMin = vMin + 0.3 * vRange;
+        const zoneVMax = vMin + 0.7 * vRange;
+        const zoneH = zoneVMax - zoneVMin;
+        g.rect(uMin, zoneVMin, uRange, zoneH).fill({ color: 0x2a2a22 });
+
+        // 45° hazard stripes, clipped to the zone's U extent (lines where
+        // u - v = const; only each diagonal's on-screen span is emitted)
+        const stripeSpacing = 8;                       // px between stripe diagonals
+        for (let d = uMin - zoneH; d <= uMax + zoneH; d += stripeSpacing * 2) {
+          const x1 = Math.max(uMin, Math.min(uMax, d));
+          const y1 = zoneVMin + (x1 - d);
+          const x2 = Math.max(uMin, Math.min(uMax, d + zoneH));
+          const y2 = zoneVMax - ((d + zoneH) - x2);
+          if (x2 > x1) g.moveTo(x1, y1).lineTo(x2, y2);
+        }
+        g.stroke({ color: 0xf0c000, width: 2 });
+        g.rect(uMin, zoneVMin, uRange, zoneH).stroke({ color: 0xe6b400, width: 2 });
+
+        // 4. Scattered boxes outside the zone (2–3 m, 1px SE shadow + outline)
+        const boxCount = Math.max(3, Math.min(12, Math.floor(areaOf(id, geometry) / 40)));
+        const boxColours = [0x8B6344, 0x5C3D1E, 0xA0785A];
+        const boxRotations = [0, 15 * Math.PI / 180, -12 * Math.PI / 180, Math.PI / 2];
+        for (let i = 0; i < boxCount; i++) {
+          let bu, bv, attempts = 0;
+          do {
+            bu = iuMin + rand() * (iuMax - iuMin);
+            bv = ivMin + rand() * (ivMax - ivMin);
+            attempts++;
+          } while (bv > zoneVMin - INSET_PX && bv < zoneVMax + INSET_PX && attempts < 10);
+
+          const bSize = (2 + rand()) * PX;            // 2–3 m per side
+          const bRot = boxRotations[Math.floor(rand() * boxRotations.length)];
+          const bCol = boxColours[Math.floor(rand() * 3)];
+
+          // Own container so each box rotates about its own centre
+          const boxCont = new PIXI.Container();
+          boxCont.position.set(bu, bv);
+          boxCont.rotation = bRot;
+          const h = bSize / 2;
+          const bg = new PIXI.Graphics();
+          bg.rect(-h + 1, -h + 1, bSize, bSize).fill({ color: 0x3a2a14 });  // 1px SE shadow
+          bg.rect(-h, -h, bSize, bSize).fill({ color: bCol });
+          bg.rect(-h, -h, bSize, bSize).stroke({ color: 0x3a2a14, width: 1 });
+          boxCont.addChild(bg);
+          cont.addChild(boxCont);
+        }
+      }
+      else if (cls === 'warehouse') {
+        // 1. Concrete base
+        g.rect(uMin, vMin, uRange, vRange).fill({ color: 0x7e8080 });
+
+        // 2. Rack aisles — strips running along V (perpendicular to the
+        //    longest wall), one strip per ~5 m of U. Even strips hold a
+        //    1.8 m rack bay plus walkway remainder; odd strips are pure
+        //    walkway (neighbouring walkways merge into wide aisles).
+        const aisleCount = Math.max(2, Math.floor(uRange / (5 * PX)));
+        const stripW = uRange / aisleCount;
+        for (let i = 0; i < aisleCount; i++) {
+          const uStart = uMin + i * stripW;
+          const rackW = Math.min(stripW, 1.8 * PX);
+
+          if (i % 2 === 0) {
+            // walkway remainder first, so the rack's shadow falls onto it
+            g.rect(uStart + rackW, vMin, stripW - rackW, vRange).fill({ color: 0x8a8c8c });
+            // rack bay structure
+            g.rect(uStart, vMin, rackW, vRange).fill({ color: 0x555555 });
+            // shelf lines across the bay every 0.8 m
+            for (let sv = vMin; sv <= vMax; sv += 0.8 * PX) {
+              g.moveTo(uStart, sv).lineTo(uStart + rackW, sv);
+            }
+            g.stroke({ color: 0x3a3a3a, width: 1 });
+            // end uprights at the bay's left + right edges
+            g.rect(uStart, vMin, 2, vRange).fill({ color: 0x3a3a3a });
+            g.rect(uStart + rackW - 2, vMin, 2, vRange).fill({ color: 0x3a3a3a });
+            // 2px aisle shadow to the rack's right (light is top-left)
+            g.rect(uStart + rackW, vMin, 2, vRange).fill({ color: 0x6a6c6c });
+          } else {
+            // walkway strip + dashed centre safety line (1.5 m dash, 0.5 m gap)
+            g.rect(uStart, vMin, stripW, vRange).fill({ color: 0x8a8c8c });
+            const lineU = uStart + stripW / 2;
+            for (let sv = vMin; sv < vMax; sv += 2 * PX) {
+              g.rect(lineU, sv, 1, Math.min(1.5 * PX, vMax - sv)).fill({ color: 0xc8a000 });
+            }
+          }
+        }
+      }
+
+      else if (cls === 'office' || cls === 'hq') {
+        // 1. Carpet base + dithered weave — one dark px per 2px lattice cell,
+        //    all batched into a single fill. Skipped entirely on footprints
+        //    whose lattice exceeds the 2000-drawn-pixel cap.
+        g.rect(uMin, vMin, uRange, vRange).fill({ color: 0x7a6e8a });
+        const ditherStep = 2;
+        const dCols = Math.max(0, Math.floor(uRange / ditherStep));
+        const dRows = Math.max(0, Math.floor(vRange / ditherStep));
+        if (dCols * dRows <= 4000) {                  // ≤ 2000 pixels actually drawn
+          for (let ci = 0; ci < dCols; ci++) {
+            for (let ri = 0; ri < dRows; ri++) {
+              if ((ci + ri) % 2 === 0) g.rect(uMin + ci * ditherStep, vMin + ri * ditherStep, 1, 1);
+            }
+          }
+          g.fill({ color: 0x6e6280 });
+        }
+        // 2. Central corridor along U — splits the floor into two banks
+        const corrW = 1.5 * PX;
+        g.rect(uMin, vMid - corrW / 2, uRange, corrW).fill({ color: 0x8a7e9c });
+
+        // 3. Cubicles (4 m × 3 m cells) in both banks, high-U end left free
+        //    for the meeting room. Pass 1: partition walls (right + outer
+        //    edge) — queued line work must be stroked BEFORE any fill() is
+        //    called, or the fill would swallow the pending path.
+        const cellU = 4 * PX, cellV = 3 * PX;
+        const mRoomW = Math.min(6 * PX, uRange * 0.25);
+        const colCount = Math.max(0, Math.floor((uRange - mRoomW) / cellU));
+        const cells = [];                              // { cu, cvNear, cvFar }
+        for (let col = 0; col < colCount; col++) {
+          const cu = uMin + col * cellU;
+          for (let bank = 0; bank < 2; bank++) {
+            const dir = bank === 0 ? -1 : 1;           // banks grow away from corridor
+            const edge = vMid + dir * corrW / 2;
+            const rows = Math.floor(
+              Math.abs(dir < 0 ? edge - vMin : vMax - edge) / cellV);
+            for (let row = 0; row < rows; row++) {
+              const cvNear = edge + dir * row * cellV; // corridor-side edge
+              const cvFar = cvNear + dir * cellV;      // wall-side edge
+              cells.push({ cu, cvNear, cvFar });
+              g.moveTo(cu + cellU, cvNear).lineTo(cu + cellU, cvFar);
+              g.moveTo(cu, cvFar).lineTo(cu + cellU, cvFar);
+            }
+          }
+        }
+        g.stroke({ color: 0xc0b4d4, width: 1 });       // one stroke for all walls
+
+        // Pass 2: desks (2 m × 1 m at the cell's outer edge) + chairs
+        // (0.7 m × 0.7 m, 0.5 m in front of the desk, corridor side)
+        const deskW = 2 * PX, deskH = PX, chairS = 0.7 * PX;
+        for (const { cu, cvNear, cvFar } of cells) {
+          const dir = cvFar < cvNear ? -1 : 1;
+          const deskU = cu + PX * 0.3;
+          const deskV = dir < 0 ? cvFar + PX * 0.3 : cvFar - deskH - PX * 0.3;
+          g.rect(deskU + 1, deskV + 1, deskW, deskH).fill({ color: 0xa89c7c });  // 1px SE shadow
+          g.rect(deskU, deskV, deskW, deskH).fill({ color: 0xc8bc98 });
+          const chairU = deskU + deskW / 2 - chairS / 2;
+          const chairV = dir < 0 ? deskV + deskH + PX * 0.5 : deskV - chairS - PX * 0.5;
+          g.rect(chairU, chairV, chairS, chairS).fill({ color: 0x3c3448 });
+        }
+
+        // 4. Meeting room at the high-U end — carpet fill (hides the
+        //    corridor/cubicle work inside), 2px border, centred table
+        const mRoomU = uMax - mRoomW;
+        const mRoomV = vMin + INSET_PX, mRoomH = vRange - INSET_PX * 2;
+        g.rect(mRoomU, mRoomV, mRoomW, mRoomH).fill({ color: 0x7a6e8a });
+        g.rect(mRoomU, mRoomV, mRoomW, mRoomH).stroke({ color: 0xd4c8e8, width: 2 });
+        const tW = Math.min(3 * PX, mRoomW - PX * 0.6), tH = 1.5 * PX;
+        if (tW > 0 && mRoomH > tH + PX * 0.5) {
+          g.rect(mRoomU + (mRoomW - tW) / 2, vMid - tH / 2, tW, tH).fill({ color: 0xc8bc98 });
+        }
+      }
+
+      return cont;
+    };
+
     // ---- PixiJS conveyor belts inside factory buildings ----
     // Each factory line renders as one animated belt module (custom Piskel
     // sprite from machines-data.js), laid out on an interior grid that
@@ -1800,6 +2062,11 @@
       return layout;
     };
 
+    // ---- Interior floor rendering (factory / warehouse / office) ----
+    // Sits below beltRoot in the PixiJS scene, fades in at INTERIOR_MIN_ZOOM.
+    let interiorRoot = null;
+    const interiorContainers = new Map();   // building id -> PIXI.Container
+
     let pixiApp = null;
     let beltRoot = null;                        // holds one container per building
     let beltFrames = [];                        // one texture per animation frame
@@ -1881,6 +2148,69 @@
       capacityCache.clear();
       for (const c of beltContainers.values()) c.destroy({ children: true });
       beltContainers.clear();
+    };
+
+    // Per-frame interior pass — same cheap pattern as renderBelts(): the
+    // expensive buildInterior() runs once per building (cached in
+    // interiorContainers); every other tick only reprojects position /
+    // rotation / scale from map.project(). Fades the whole layer in over
+    // INTERIOR_MIN_ZOOM ±0.5 zoom and culls off-screen buildings.
+    const renderInteriors = () => {
+      if (!pixiApp || !interiorRoot) return;
+      const zoom = map.getZoom();
+      const alpha = smoothstep(INTERIOR_MIN_ZOOM - 0.5, INTERIOR_MIN_ZOOM + 0.5, zoom);
+      interiorRoot.alpha = alpha;
+      if (alpha === 0) { interiorRoot.visible = false; return; }
+      interiorRoot.visible = true;
+
+      const mpp = 156543.03392 * Math.cos(CHATTERIS[1] * Math.PI / 180) / Math.pow(2, zoom);
+      const scale = (MODULE_M / mpp) / 32;
+      const w = pixiApp.screen.width, h = pixiApp.screen.height;
+
+      for (const [id, rec] of owned) {
+        const geom = geometryFor(id);
+        if (!geom) continue;
+
+        // Bbox cull — same pattern as belt rendering
+        const [minX, minY, maxX, maxY] = bboxOfGeometry(id, geom);
+        const tl = map.project([minX, maxY]);
+        const br = map.project([maxX, minY]);
+        if (br.x < 0 || tl.x > w || br.y < 0 || tl.y > h) {
+          const existing = interiorContainers.get(id);
+          if (existing) existing.visible = false;
+          continue;
+        }
+
+        let cont = interiorContainers.get(id);
+        if (!cont) {
+          cont = buildInterior(id, rec.cls, geom);
+          interiorRoot.addChild(cont);
+          interiorContainers.set(id, cont);
+        }
+
+        const layout = layoutFor(id, geom);
+        const anchor = map.project([layout.cx, layout.cy]);
+        cont.position.set(anchor.x, anchor.y);
+        cont.rotation = layout.angle;
+        cont.scale.set(scale);
+        cont.visible = true;
+      }
+
+      // Remove containers for buildings that are no longer owned
+      for (const id of [...interiorContainers.keys()]) {
+        if (!owned.has(id)) {
+          interiorContainers.get(id).destroy({ children: true });
+          interiorContainers.delete(id);
+        }
+      }
+    };
+
+    // Hook for ownership changes (buy / sell / reset) — drops the cached
+    // interiors so the next frame rebuilds them (the class may have changed).
+    // Mirrors refreshBelts().
+    const refreshInteriors = () => {
+      for (const c of interiorContainers.values()) c.destroy({ children: true });
+      interiorContainers.clear();
     };
 
     // ---- Animated 📦 deliveries (factory→warehouse, storage→buyer) ----
@@ -2008,6 +2338,8 @@
           console.warn('machines-data.js missing — conveyor belts disabled');
         }
 
+        interiorRoot = new PIXI.Container();
+        pixiApp.stage.addChild(interiorRoot);   // interiors render below belts
         beltRoot = new PIXI.Container();
         pixiApp.stage.addChild(beltRoot);
         boxRoot = new PIXI.Container();
@@ -2022,6 +2354,7 @@
           boxTexture = tex;
         }
 
+        pixiApp.ticker.add(() => renderInteriors());
         pixiApp.ticker.add(() => renderBelts());
         pixiApp.ticker.add(() => renderBoxes());
       } catch (err) {
