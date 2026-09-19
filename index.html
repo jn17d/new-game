@@ -1967,7 +1967,7 @@
     // follows the footprint's longest edge. Layouts are computed once per
     // building and cached; the render loop only updates position / scale /
     // rotation from map.project(), so panning and zooming stay cheap.
-    const BELT_MIN_ZOOM = 18;                     // below this belts are unreadable
+    const BELT_MIN_ZOOM = 18;                     // belts fade in with interiors (15.5→16.5)
     const MODULE_M = 4;                           // world size (m) of one 32px module
     const ROW_GAP_M = MODULE_M * (22 / 32);       // trimmed art is 22px of 32
     const FRAME_MS = 120;                         // ms per animation frame
@@ -2086,11 +2086,13 @@
     const renderBelts = () => {
       if (!pixiApp || !beltRoot) return;
       const zoom = map.getZoom();
-      beltRoot.visible = zoom >= BELT_MIN_ZOOM;
-      if (!beltRoot.visible || !beltFrames.length) return;
+      const alpha = smoothstep(INTERIOR_MIN_ZOOM - 0.5, INTERIOR_MIN_ZOOM + 0.5, zoom);
+      beltRoot.alpha = alpha;
+      if (alpha === 0 || !beltFrames.length) { beltRoot.visible = false; return; }
+      beltRoot.visible = true;
 
       const w = pixiApp.screen.width, h = pixiApp.screen.height;
-      const mpp = 156543.03392 * Math.cos(CHATTERIS[1] * Math.PI / 180) / Math.pow(2, zoom);
+      const mpp = 78271.5 * Math.cos(CHATTERIS[1] * Math.PI / 180) / Math.pow(2, zoom);
       const scale = (MODULE_M / mpp) / 32;
       const frameIdx = Math.floor(performance.now() / FRAME_MS) % beltFrames.length;
 
@@ -2163,7 +2165,7 @@
       if (alpha === 0) { interiorRoot.visible = false; return; }
       interiorRoot.visible = true;
 
-      const mpp = 156543.03392 * Math.cos(CHATTERIS[1] * Math.PI / 180) / Math.pow(2, zoom);
+      const mpp = 78271.5 * Math.cos(CHATTERIS[1] * Math.PI / 180) / Math.pow(2, zoom);
       const scale = (MODULE_M / mpp) / 32;
       const w = pixiApp.screen.width, h = pixiApp.screen.height;
 
